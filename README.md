@@ -121,7 +121,7 @@ Phase 0: 健康/基线期  →  Phase 1: 微损伤萌生期  →  Phase 2: 损�
 | 阶段 | 应变特征 | AE特征 | 光纤特征 | 检测方法 |
 |------|---------|--------|---------|---------|
 | **Phase 0: 健康期** | 稳定波动，无趋势性变化 | Peak<0.01, Kurtosis<10 | 信号平稳，无突变 | 滑动窗口统计基线 |
-| **Phase 1: 微损伤萌生** | 轻微漂移或波动增大 | 偶发高Kurtosis事件(>50) | 局部波动增大 | AE累积能量阈值 + CUSUM |
+| **Phase 1: 微损伤萌生** | 轻微漂移或波动增大 | 偶发高Kurtosis事件(>50) | 局部波动增大 | AE累积能量变点检测 + 事件率分析 |
 | **Phase 2: 损伤扩展** | 趋势性变化或周期性变化 | AE事件频率和幅值显著增加 | 信号模式改变 | 应变趋势检测 + AE事件率 |
 | **Phase 3: 结构失效** | 突变跳变（如019的0.1→8.4） | 极端事件(Kurtosis>500) | 信号大幅偏移 | 突变点检测(PELT/Binary Segmentation) |
 
@@ -129,7 +129,7 @@ Phase 0: 健康/基线期  →  Phase 1: 微损伤萌生期  →  Phase 2: 损�
 
 #### 3.3.1 基于应变数据的阶段划分
 
-**方法：Change Point Detection (变点检测)**
+**方法一：Change Point Detection (变点检测)**
 
 ```python
 # 使用 Binary Segmentation 算法（内存友好）
@@ -144,38 +144,76 @@ change_points = model.predict(pen=10)
 - 对于017组，可检测循环加载的周期边界
 - 对于大数据集（023/025/026等），自动降采样至5000点以保证性能
 
+**方法二：应变跳变检测（百分位阈值 + 多跳变聚类）**
+
+使用 `np.percentile(sd, 99.5)` 替代固定阈值，对检测到的跳变点进行聚类合并（连续索引视为同一跳变事件），支持多个跳变点形成多级阶段过渡：
+
+```python
+sd = np.abs(np.diff(s, prepend=s[0]))
+th = np.percentile(sd, 99.5)          # 百分位阈值，对异常值更鲁棒
+jump_indices = np.where(sd > th)[0]
+# 聚类合并：连续索引视为同一跳变事件
+# 取每个聚类中差分幅度最大的点作为代表跳变点
+```
+
 #### 3.3.2 基于声发射数据的阶段划分
 
-**方法：累积AE能量 + 事件率分析**
+**方法：累积AE能量变点检测**
 
 1. **计算累积AE能量曲线：**
    - `AE_energy = Peak^2` 或 `AE_energy = RMS^2`
    - `Cumulative_Energy = cumsum(AE_energy)`
    - 曲线斜率变化点对应阶段转换
 
-2. **AE事件率分析：**
+2. **自适应变点检测：**
+   使用 `ruptures.Binseg` 对累积能量归一化曲线进行变点检测，自动识别斜率变化位置作为阶段边界，替代固定阈值划分：
+
+```python
+ce = features['ae_cumulative_energy_norm'].values
+# 降采样至2000点以控制内存
+step = max(1, n_ce // 2000)
+ce_sampled = ce[::step]
+model = rpt.Binseg(model='l2').fit(ce_sampled.reshape(-1, 1))
+change_points = model.predict(pen=max(1, len(ce_sampled) * 0.02))
+# 变点位置映射回原始索引，按时间顺序标记阶段
+```
+
+3. **AE事件率分析：**
    - 滑动窗口（窗口大小=100）内统计Kurtosis>50的事件数量
    - 事件率突增点对应损伤萌生
 
-3. **多特征融合指标：**
+4. **多特征融合指标：**
    - 构建综合AE异常指数：`AE_anomaly = w1*Peak_norm + w2*Kurtosis_norm + w3*RMS_norm`
    - 对该指数进行变点检测
 
 #### 3.3.3 基于光纤数据的阶段划分
 
-**方法：信号统计特征变化检测**
+**方法：多统计量融合检测**
 
-1. 对每个光纤通道计算滑动窗口统计量（均值、标准差）
-2. 检测统计量的变点
-3. 对于017组s4通道的交替振荡，计算相邻点差分绝对值，检测模式变化
+提取三个维度的统计特征进行融合：
+
+1. **均值偏移**：所有通道的平均值相对于基线的偏移程度
+2. **标准差偏移**：通道间标准差的波动变化
+3. **通道相关性退化**：各通道与均值偏离程度的变化
+
+```python
+fusion_score = 0.5 * mean_offset + 0.3 * std_offset + 0.2 * corr_degrad
+th_low = np.percentile(fusion_score, 70)
+th_high = np.percentile(fusion_score, 90)
+```
+
+- 融合得分低于70%分位数 → Phase 0
+- 融合得分介于70%-90%分位数 → Phase 1
+- 融合得分高于90%分位数 → Phase 2
+- 对于017组s4通道的交替振荡，标准差偏移和相关性退化指标能有效捕捉
 
 #### 3.3.4 多源融合阶段划分
 
 **融合策略：优先级融合**
 
 ```
-1. 应变跳变检测 → 直接标记 Phase 3（结构失效）
-2. AE 累积能量水平 → 主导 Phase 0-2 划分
+1. 应变跳变检测 → 按跳变幅度和时间顺序标记 Phase 2/3
+2. AE 累积能量变点检测 → 主导 Phase 0-2 划分
 3. FO 辅助修正 → 在边界处微调
 ```
 
@@ -230,6 +268,19 @@ anomaly = diff > threshold  # 如 threshold=1.0
 AE_anomaly_score = max(Peak_score, Kurtosis_score, RMS_score, SpectralEnergy_score)
 ```
 
+**时域扩展特征：**
+
+在原始特征基础上，增加滑动窗口高阶统计特征以增强异常检测能力：
+
+| 新增特征 | 计算方法 | 物理意义 |
+|---------|---------|---------|
+| `ae_{feat}_kurt` | 滑动窗口(100点)峰度 | 检测特征分布的尾部变化 |
+| `ae_{feat}_skew` | 滑动窗口(100点)偏度 | 检测特征分布的不对称性变化 |
+| `ae_{feat}_impulse` | 滑动窗口绝对值/均值 | 脉冲因子，检测突发冲击事件 |
+| `ae_kurtosis_ratio` | kurtosis / rms² | 归一化峰度比，消除能量影响 |
+
+应用于 `ae_peak`、`ae_rms`、`ae_mean`、`ae_spectral_energy` 四个基础特征。
+
 #### 4.2.3 光纤异常检测
 
 **方法1：通道间一致性检查**
@@ -250,33 +301,52 @@ anomaly = abs(z_score) > 3
 
 ### 4.3 多源融合异常识别
 
-#### 4.3.1 决策级融合
+#### 4.3.1 阶段感知加权投票融合
 
+根据当前时间点所处的故障阶段，动态调整各传感器权重：
+
+| 阶段 | 应变权重 | AE权重 | 光纤权重 | 设计理由 |
+|------|---------|--------|---------|---------|
+| Phase 0 (健康期) | 0.3 | 0.5 | 0.2 | AE对微损伤最敏感，应变和光纤在健康期信息量低 |
+| Phase 1 (微损伤萌生) | 0.4 | 0.4 | 0.2 | AE仍重要，应变开始出现趋势变化 |
+| Phase 2 (损伤扩展) | 0.5 | 0.3 | 0.2 | 应变趋势变化成为主要指标 |
+| Phase 3 (结构失效) | 0.6 | 0.1 | 0.3 | 应变跳变主导，光纤偏移辅助确认 |
+
+```python
+weighted_score = Σ(weight_i * anomaly_i) / Σ(weight_i)
+final_anomaly = weighted_score >= 0.5
 ```
-最终异常判定 = (应变异常 OR AE异常 OR 光纤异常) 
-                AND (至少两个传感器确认)
-```
-
-**加权投票机制：**
-
-| 场景 | 应变权重 | AE权重 | 光纤权重 |
-|------|---------|--------|---------|
-| 健康期 | 0.3 | 0.5 | 0.2 |
-| 损伤期 | 0.4 | 0.4 | 0.2 |
-| 失效期 | 0.5 | 0.3 | 0.2 |
 
 对于2源组（无光纤），权重自动归一化至应变和AE之间。
 
-#### 4.3.2 特征级融合
+#### 4.3.2 特征级融合（Isolation Forest）
 
-构建融合特征向量：
-```
-F_fused = [strain_norm, AE_Peak_norm, AE_Kurtosis_norm, 
-           AE_RMS_norm, FO_s1_norm, FO_s2_norm, FO_s3_norm, 
-           FO_s4_norm, FO_s5_norm]
+**特征分组 + 独立检测策略：**
+
+将特征按传感器来源分组，每组独立训练Isolation Forest模型，再通过投票融合结果：
+
+```python
+feature_groups = {
+    'strain': [strain_raw, strain_diff, strain_zscore, strain_ma, strain_std],
+    'ae':     [ae_peak, ae_kurtosis, ae_rms, ...],  # 所有ae_前缀特征（除累积能量）
+    'fo':     [fo_s1, fo_s2, fo_s3, fo_s4, fo_s5, ...]  # 所有fo_前缀特征
+}
+# 每组独立训练 IF，contamination=0.05
+# 投票融合：至少2组判定为异常 → 最终异常
 ```
 
-使用 **Isolation Forest** 进行无监督异常检测。
+优势：
+- 天然处理2源/3源混合场景（023/024/025无光纤组自动跳过FO组）
+- 避免特征混合导致的维度灾难
+- 与阶段感知加权投票方案自然衔接
+
+#### 4.3.3 融合决策规则
+
+```
+最终异常标记 = 
+    (加权投票得分 ≥ 0.5) → 高置信度异常
+    OR (IsolationForest投票 ≥ 2组 AND 加权得分 ≥ 0.3) → 中置信度异常
+```
 
 ---
 
@@ -287,7 +357,7 @@ F_fused = [strain_norm, AE_Peak_norm, AE_Kurtosis_norm,
 ```
                     ┌─────────────────────────────────┐
                     │         决策融合层                │
-                    │  (加权投票 / 优先级融合)           │
+                    │  (阶段感知加权投票 / IF分组融合)    │
                     └──────────┬──────────────────────┘
                                │
           ┌────────────────────┼────────────────────┐
@@ -297,7 +367,7 @@ F_fused = [strain_norm, AE_Peak_norm, AE_Kurtosis_norm,
    │             │    │              │    │              │
    │ • 变点检测   │    │ • 累积能量    │    │ • 通道统计    │
    │ • 趋势分析   │    │ • 事件率     │    │ • 模式检测    │
-   │ • 突变检测   │    │ • 多特征异常  │    │ • 相关性分析  │
+   │ • 跳变检测   │    │ • 多特征异常  │    │ • 相关性分析  │
    └──────┬──────┘    └──────┬───────┘    └──────┬───────┘
           │                   │                   │
           └───────────────────┼───────────────────┘
@@ -329,10 +399,8 @@ F_fused = [strain_norm, AE_Peak_norm, AE_Kurtosis_norm,
 
 ```
 最终异常标记 = 
-    (应变异常 AND AE异常) → 高置信度结构异常
-    OR (AE异常 AND 光纤异常) → 中置信度异常
-    OR (应变异常 AND 光纤异常) → 中置信度异常
-    OR (单传感器异常 AND 异常得分 > 高阈值) → 低置信度异常（需标记）
+    (加权投票得分 ≥ 0.5) → 高置信度异常
+    OR (IF分组投票 ≥ 2组 AND 加权得分 ≥ 0.3) → 中置信度异常
 ```
 
 ### 5.3 可视化输出
@@ -558,47 +626,79 @@ multi_source_shm.py
 │   ├── load_fo()                 # 加载光纤数据
 │   └── sync_timeline()           # 时间同步
 ├── class FeatureExtractor        # 特征提取
-│   ├── extract_strain_features()
-│   ├── extract_ae_features()
-│   ├── extract_fo_features()
+│   ├── extract_strain_features() # 应变特征：原始值、差分、Z-score、移动平均、标准差
+│   ├── extract_ae_features()     # AE特征：原始映射 + 滑动窗口高阶统计特征
+│   ├── extract_fo_features()     # 光纤特征：各通道值、最大差分、标准差
 │   └── extract_all()
 ├── class StageDivider            # 故障阶段划分
-│   ├── detect_strain_jump()
-│   ├── detect_strain_change_points()
-│   ├── detect_ae_stages()
-│   ├── detect_fo_stages()
-│   └── fuse_stages()
+│   ├── _detect_strain_jump()     # 应变跳变检测（百分位阈值+多跳变聚类）
+│   ├── detect_strain_change_points()  # 应变变点检测（Binseg）
+│   ├── detect_ae_stages()        # AE阶段划分（累积能量Binseg变点检测）
+│   ├── detect_fo_stages()        # 光纤阶段划分（多统计量融合：均值+标准差+通道相关性）
+│   └── fuse_stages()             # 多源融合阶段划分
 ├── class AnomalyDetector         # 异常点识别
-│   ├── detect_strain_anomaly()
-│   ├── detect_ae_anomaly()
-│   ├── detect_fo_anomaly()
-│   ├── detect_isolation_forest()
-│   └── fuse_anomalies()
+│   ├── detect_strain_anomaly()   # 应变异常检测（滑动窗口Z-score）
+│   ├── detect_ae_anomaly()       # AE异常检测（多特征联合阈值）
+│   ├── detect_fo_anomaly()       # 光纤异常检测（通道Z-score）
+│   ├── detect_isolation_forest() # IF异常检测（特征分组+独立检测+投票融合）
+│   └── fuse_anomalies()          # 多源融合异常（阶段感知加权投票）
 ├── class InformationEvaluator    # 信息论量化评估
-│   ├── calc_entropy()
-│   ├── calc_mutual_info()
-│   ├── evaluate_source_entropy()
-│   ├── evaluate_mutual_information()
-│   ├── evaluate_information_retention_rate()
-│   ├── evaluate_feature_importance()
-│   ├── evaluate_redundancy()
-│   ├── evaluate_fusion_gain()
-│   ├── evaluate_all()
-│   ├── print_summary()
-│   ├── plot_information_matrix()
-│   ├── plot_entropy_evolution()
-│   ├── plot_feature_importance()
-│   └── plot_fusion_matrix()
+│   ├── calc_entropy()            # 香农熵计算
+│   ├── calc_mutual_info()        # 互信息计算
+│   ├── evaluate_source_entropy() # 各传感器信息熵
+│   ├── evaluate_mutual_information()  # 传感器与阶段互信息
+│   ├── evaluate_information_retention_rate()  # 信息保留率
+│   ├── evaluate_feature_importance()  # 特征重要性排序
+│   ├── evaluate_redundancy()     # 传感器冗余度
+│   ├── evaluate_fusion_gain()    # 融合增益
+│   ├── evaluate_all()            # 执行全部评估
+│   ├── print_summary()           # 打印汇总
+│   ├── plot_information_matrix() # 信息矩阵热力图
+│   ├── plot_entropy_evolution()  # 熵演化曲线
+│   ├── plot_feature_importance() # 特征重要性柱状图
+│   └── plot_fusion_matrix()      # 融合增益对比图
 ├── class Visualizer              # 可视化
-│   ├── plot_timeseries()
-│   ├── plot_stages()
-│   └── plot_anomalies()
+│   ├── plot_timeseries()         # 多源数据时间序列图
+│   ├── plot_stages()             # 阶段划分结果图
+│   └── plot_anomalies()          # 异常点标记图
 ├── process_group()               # 单组处理主流程
 ├── print_summary()               # 汇总报告打印
 └── main()                        # 主函数
 ```
 
-### 7.2 依赖库
+### 7.2 核心算法详解
+
+#### DataLoader 数据加载器
+
+- `load_strain()`：自动检测CSV/XLSX格式，统一列名映射（支持7种应变列名变体），提取time和strain列
+- `load_ae()`：加载25列AE特征，自动检测编码格式（UTF-8/GBK/ISO-8859-1）
+- `load_fo()`：加载光纤s1-s5通道数据，支持CSV/XLSX格式，自动识别Time Stamp列
+- `sync_timeline()`：以应变时间轴为基准，通过最近邻插值对齐AE和光纤数据
+- `normalize()`：Min-Max归一化到[0,1]，对AE特征使用对数归一化处理大动态范围
+
+#### FeatureExtractor 特征提取器
+
+- **应变特征**：`strain_raw`（原始值）、`strain_diff`（一阶差分）、`strain_zscore`（Z-score标准化）、`strain_ma`（移动平均）、`strain_std`（移动标准差）、`strain_cumdiff`（累积差分）
+- **AE特征**：8个原始特征映射 + 4个基础特征的滑动窗口峰度/偏度/脉冲因子（共12个衍生特征）+ 归一化峰度比 + 综合异常得分 + 事件率 + 累积能量
+- **光纤特征**：各通道值 + 最大差分 + 标准差 + 累积差分
+
+#### StageDivider 阶段划分器
+
+- **应变跳变检测**：`np.percentile(sd, 99.5)` 自适应阈值，聚类合并连续跳变点，按幅度过滤
+- **应变变点检测**：`ruptures.Binseg` 算法，降采样至5000点，pen参数自适应
+- **AE阶段划分**：累积能量归一化曲线 → Binseg变点检测 → 变点位置映射为阶段边界
+- **光纤阶段划分**：均值偏移(0.5) + 标准差偏移(0.3) + 通道相关性退化(0.2) → 融合得分 → 百分位阈值划分
+- **阶段融合**：应变跳变优先标记Phase 3，AE变点主导Phase 0-2，FO辅助修正
+
+#### AnomalyDetector 异常检测器
+
+- **应变异常**：滑动窗口(50点) Z-score > 3
+- **AE异常**：多特征联合阈值（Peak>0.8 OR Kurtosis>0.7 OR RMS>0.8 OR SpectralEnergy>0.8）
+- **光纤异常**：各通道滑动窗口Z-score > 3
+- **Isolation Forest**：特征分组（应变组/AE组/光纤组）→ 每组独立训练IF(contamination=0.05) → 投票融合（≥2组判定为异常）
+- **融合异常**：阶段感知加权投票（各阶段不同传感器权重）+ IF分组投票辅助确认
+
+### 7.3 依赖库
 
 ```python
 import os, warnings
@@ -614,7 +714,7 @@ from scipy.stats import entropy as scipy_entropy
 import ruptures as rpt
 ```
 
-### 7.3 输出结果
+### 7.4 输出结果
 
 1. **控制台输出**：各组的阶段划分结果、异常点统计、信息论评估指标
 2. **可视化图表**（每组7张PNG）：
@@ -772,7 +872,7 @@ groups = ['016', '017', '018', '019', '020', '023', '024', '025', '026']
 
 本方案成功实现了对9组（016-019、020、023-026）多源传感器数据的融合处理，覆盖了3源（应变+AE+光纤）和2源（应变+AE）两种数据场景。主要结论：
 
-1. **故障阶段划分**：基于应变变点检测、AE累积能量分析和光纤信号变化检测，实现了从健康期（Phase 0）到结构失效（Phase 3）的完整阶段划分
-2. **异常点识别**：通过多传感器决策级融合和Isolation Forest特征级融合，有效识别了结构异常点
+1. **故障阶段划分**：基于应变变点检测、AE累积能量变点检测和光纤多统计量融合，实现了从健康期（Phase 0）到结构失效（Phase 3）的完整阶段划分
+2. **异常点识别**：通过阶段感知加权投票融合和Isolation Forest特征分组独立检测，有效识别了结构异常点
 3. **信息论评估**：引入信息熵、互信息、信息保留率、特征重要性、冗余度和融合增益等量化指标，为融合效果提供了客观评价依据
 4. **代码架构**：采用面向对象设计，6个核心类各司其职，支持灵活扩展新的数据组

@@ -245,6 +245,25 @@ class FeatureExtractor:
         for orig, short in key_map.items():
             if orig in self.data.columns:
                 df[f'ae_{short}'] = self.data[orig]
+        # --- 新增：滑动窗口高阶统计特征 ---
+        w = 100  # 滑动窗口大小
+        for feat_name in ['ae_peak', 'ae_rms', 'ae_mean', 'ae_spectral_energy']:
+            if feat_name in df.columns:
+                s = df[feat_name]
+                # 滑动峰度 (Kurtosis)
+                kurt = s.rolling(w, min_periods=w // 2).kurt()
+                df[f'{feat_name}_kurt'] = kurt.fillna(0)
+                # 滑动偏度 (Skewness)
+                skew = s.rolling(w, min_periods=w // 2).skew()
+                df[f'{feat_name}_skew'] = skew.fillna(0)
+                # 滑动脉冲因子 (Impulse Factor = peak / mean of abs)
+                ma = s.rolling(w, min_periods=w // 2).mean().clip(lower=1e-10)
+                df[f'{feat_name}_impulse'] = (s.abs() / ma).fillna(0)
+        # --- 新增：滑动峭度比 (Kurtosis / RMS^2) ---
+        if 'ae_kurtosis' in df.columns and 'ae_rms' in df.columns:
+            rms_sq = df['ae_rms'].clip(lower=1e-10) ** 2
+            df['ae_kurtosis_ratio'] = (df['ae_kurtosis'] / rms_sq).clip(upper=100).fillna(0)
+        # --- 原有异常得分 ---
         ws, score = 0, pd.Series(np.zeros(len(self.data)), index=self.data.index)
         for feat, w in [('ae_peak', 0.3), ('ae_kurtosis', 0.3), ('ae_rms', 0.2), ('ae_spectral_energy', 0.2)]:
             if feat in df.columns:
@@ -307,19 +326,38 @@ class StageDivider:
         return stages
 
     def _detect_strain_jump(self):
+        """使用百分位阈值检测应变跳变，支持多跳变返回"""
         if 'strain' not in self.data.columns:
-            return None, 0
+            return []
         s = self.data['strain'].values
         sd = np.abs(np.diff(s, prepend=s[0]))
-        th = np.mean(sd) + 6 * np.std(sd)
+        # 使用 99.5 百分位替代 mean+6σ，自适应于各组数据
+        th = np.percentile(sd, 99.5)
         ji = np.where(sd > th)[0]
         if len(ji) == 0:
-            return None, 0
-        mj = ji[np.argmax(sd[ji])]
+            return []
+        # 对跳变点进行聚类合并（连续索引视为同一跳变事件）
+        # 使用位置索引而非值索引进行切片
+        jumps = []
+        cluster_pos_start = 0
+        for i in range(1, len(ji)):
+            if ji[i] - ji[i-1] > 10:  # 间隔超过10个点视为不同事件
+                # 取簇内最大跳变位置
+                cluster_indices = ji[cluster_pos_start:i]  # 使用位置切片
+                if len(cluster_indices) > 0:
+                    best = cluster_indices[np.argmax(sd[cluster_indices])]
+                    jumps.append(best)
+                cluster_pos_start = i
+        # 处理最后一个簇
+        cluster_indices = ji[cluster_pos_start:]
+        if len(cluster_indices) > 0:
+            best = cluster_indices[np.argmax(sd[cluster_indices])]
+            jumps.append(best)
+        # 过滤：跳变幅度需超过应变总范围的 10%
         sr = np.percentile(s, 99) - np.percentile(s, 1)
-        if sr > 0 and sd[mj] > sr * 0.2:
-            return mj, sd[mj]
-        return None, 0
+        if sr > 0:
+            jumps = [j for j in jumps if sd[j] > sr * 0.1]
+        return sorted(jumps)
 
     def detect_strain_change_points(self):
         if 'strain' not in self.data.columns:
@@ -327,9 +365,9 @@ class StageDivider:
         sv = self.data['strain'].values.reshape(-1, 1)
         n = len(sv)
         cps = []
-        ji, _ = self._detect_strain_jump()
-        if ji is not None:
-            cps.append(ji)
+        # 使用改进的多跳变检测
+        jumps = self._detect_strain_jump()
+        cps.extend(jumps)
         if n > 5000:
             step = max(1, n // 5000)
             si = np.arange(0, n, step)
@@ -351,37 +389,93 @@ class StageDivider:
         return np.array(cps)
 
     def detect_ae_stages(self):
+        """使用 Binseg 变点检测在累积能量曲线上自适应划分阶段"""
         if 'ae_cumulative_energy_norm' not in self.features.columns:
             return None
         n = len(self.data)
         ce = self.features['ae_cumulative_energy_norm'].values
         stages = np.zeros(n, dtype=int)
-        for i in range(n):
-            if ce[i] < 0.05:
-                stages[i] = 0
-            elif ce[i] < 0.40:
-                stages[i] = 1
-            elif ce[i] < 0.80:
-                stages[i] = 2
-            else:
-                stages[i] = 3
+        # 在累积能量曲线上检测变点，自适应确定阶段阈值
+        ce_2d = ce.reshape(-1, 1)
+        n_ce = len(ce_2d)
+        if n_ce > 100:
+            # 降采样加速
+            step = max(1, n_ce // 2000)
+            si = np.arange(0, n_ce, step)
+            ce_s = ce_2d[si]
+            try:
+                model = rpt.Binseg(model='l2').fit(ce_s)
+                # 检测3个变点对应4个阶段
+                cps = model.predict(pen=max(1, len(ce_s) * 0.02))
+                cps = sorted([si[min(cp, len(si)-1)] for cp in cps if 5 < cp < len(ce_s) - 5])
+            except Exception:
+                cps = []
+        else:
+            cps = []
+        if len(cps) >= 3:
+            # 使用前3个变点划分4个阶段
+            p1, p2, p3 = cps[0], cps[1], cps[2]
+            stages[p1:] = np.maximum(stages[p1:], 1)
+            stages[p2:] = np.maximum(stages[p2:], 2)
+            stages[p3:] = np.maximum(stages[p3:], 3)
+        elif len(cps) == 2:
+            p1, p2 = cps[0], cps[1]
+            stages[p1:] = np.maximum(stages[p1:], 1)
+            stages[p2:] = np.maximum(stages[p2:], 2)
+        elif len(cps) == 1:
+            stages[cps[0]:] = np.maximum(stages[cps[0]:], 1)
+        else:
+            # 无变点：按能量比例等分
+            q33, q66 = np.percentile(ce, 33), np.percentile(ce, 66)
+            for i in range(n):
+                if ce[i] < q33:
+                    stages[i] = 0
+                elif ce[i] < q66:
+                    stages[i] = 1
+                else:
+                    stages[i] = 2
         stages = self._ensure_monotonic(stages)
-        print(f'  [阶段-AE] 阶段分布: 0={np.sum(stages==0)}, 1={np.sum(stages==1)}, 2={np.sum(stages==2)}, 3={np.sum(stages==3)}')
+        print(f'  [阶段-AE] 变点数={len(cps)}, 阶段分布: 0={np.sum(stages==0)}, 1={np.sum(stages==1)}, 2={np.sum(stages==2)}, 3={np.sum(stages==3)}')
         return stages
 
     def detect_fo_stages(self):
+        """多统计量融合：均值偏移 + 标准差变化 + 通道间相关性退化"""
         fo_cols = self._get_fo_cols()
         if not fo_cols:
             return None
         n = len(self.data)
-        stages = np.zeros(n, dtype=int)
-        fo_mean = np.mean(self.data[fo_cols].values, axis=1)
+        fv = self.data[fo_cols].values
+        # 1) 均值偏移比例
+        fo_mean = np.mean(fv, axis=1)
         init_m = np.mean(fo_mean[:100])
-        fdn = np.abs(fo_mean - init_m) / max(np.max(np.abs(fo_mean - init_m)), 1)
+        denom = max(np.max(np.abs(fo_mean - init_m)), 1)
+        mean_offset = np.abs(fo_mean - init_m) / denom
+        # 2) 标准差变化比例
+        fo_std = np.std(fv, axis=1)
+        init_s = np.mean(fo_std[:100])
+        denom_s = max(np.max(np.abs(fo_std - init_s)), 1)
+        std_offset = np.abs(fo_std - init_s) / denom_s
+        # 3) 通道间相关性退化（各通道与均值的偏差一致性）
+        channel_dev = np.std(fv - fo_mean.reshape(-1, 1), axis=1)
+        init_cd = np.mean(channel_dev[:100])
+        denom_cd = max(np.max(np.abs(channel_dev - init_cd)), 1)
+        corr_degrad = np.abs(channel_dev - init_cd) / denom_cd
+        # 融合得分：均值偏移(0.5) + 标准差变化(0.3) + 相关性退化(0.2)
+        fusion_score = 0.5 * mean_offset + 0.3 * std_offset + 0.2 * corr_degrad
+        # 自适应阈值：使用百分位
+        th_low = np.percentile(fusion_score, 70)
+        th_high = np.percentile(fusion_score, 90)
+        stages = np.zeros(n, dtype=int)
         for i in range(n):
-            stages[i] = 0 if fdn[i] < 0.15 else (1 if fdn[i] < 0.50 else 2)
+            if fusion_score[i] < th_low:
+                stages[i] = 0
+            elif fusion_score[i] < th_high:
+                stages[i] = 1
+            else:
+                stages[i] = 2
         stages = self._ensure_monotonic(stages)
-        print(f'  [阶段-光纤] 阶段分布: 0={np.sum(stages==0)}, 1={np.sum(stages==1)}, 2={np.sum(stages==2)}')
+        print(f'  [阶段-光纤] 融合阈值: low={th_low:.3f}, high={th_high:.3f}, '
+              f'阶段分布: 0={np.sum(stages==0)}, 1={np.sum(stages==1)}, 2={np.sum(stages==2)}')
         return stages
 
     def fuse_stages(self):
@@ -389,22 +483,30 @@ class StageDivider:
         scp = self.detect_strain_change_points()
         ae_s = self.detect_ae_stages()
         fo_s = self.detect_fo_stages()
-        ss = np.zeros(n, dtype=int)
-        for cp in scp:
-            ss[cp:] = 3
-        if np.sum(ss == 3) > 0:
-            f3 = np.where(ss == 3)[0][0]
-            fused = np.zeros(n, dtype=int)
-            fused[f3:] = 3
-            fused[:f3] = ae_s[:f3] if ae_s is not None else 0
-            self.fused_stages = fused
-        else:
-            self.fused_stages = ae_s.copy() if ae_s is not None else np.zeros(n, dtype=int)
-            if fo_s is not None:
-                for i in range(n):
-                    if fo_s[i] >= 2 and self.fused_stages[i] < 2:
-                        self.fused_stages[i] = max(self.fused_stages[i], 1)
-        self.fused_stages = self._ensure_monotonic(self.fused_stages)
+        # 基础阶段：从 AE 开始
+        fused = ae_s.copy() if ae_s is not None else np.zeros(n, dtype=int)
+        # 多跳变分段：按跳变点位置将后续阶段提升
+        # 将跳变点按位置排序，根据跳变严重程度分配阶段
+        if len(scp) > 0:
+            # 计算每个跳变点的幅度
+            s = self.data['strain'].values if 'strain' in self.data.columns else None
+            if s is not None:
+                sd = np.abs(np.diff(s, prepend=s[0]))
+                # 按幅度排序跳变点
+                cp_with_mag = [(cp, sd[cp] if cp < len(sd) else 0) for cp in scp]
+                cp_with_mag.sort(key=lambda x: x[1], reverse=True)
+                # 最大跳变 -> Phase 3，其余 -> Phase 2
+                if len(cp_with_mag) >= 1:
+                    top_cp = cp_with_mag[0][0]
+                    fused[top_cp:] = np.maximum(fused[top_cp:], 3)
+                for mag_cp, _ in cp_with_mag[1:]:
+                    fused[mag_cp:] = np.maximum(fused[mag_cp:], 2)
+        # 光纤辅助：如果光纤进入 Phase 2+ 但融合阶段仍较低，提升到至少 Phase 1
+        if fo_s is not None:
+            for i in range(n):
+                if fo_s[i] >= 2 and fused[i] < 2:
+                    fused[i] = max(fused[i], 1)
+        self.fused_stages = self._ensure_monotonic(fused)
         print(f'  [阶段-融合] 最终阶段分布: 0={np.sum(self.fused_stages==0)}, 1={np.sum(self.fused_stages==1)}, 2={np.sum(self.fused_stages==2)}, 3={np.sum(self.fused_stages==3)}')
         return self.fused_stages
 
@@ -414,9 +516,10 @@ class StageDivider:
 class AnomalyDetector:
     """基于多源数据融合的异常点识别"""
 
-    def __init__(self, data, features):
+    def __init__(self, data, features, stages=None):
         self.data = data
         self.features = features
+        self.stages = stages  # 阶段信息，用于阶段感知加权融合
         self.anomalies = {}
         self.fused_anomalies = None
 
@@ -469,27 +572,52 @@ class AnomalyDetector:
         return anomaly
 
     def detect_isolation_forest(self):
-        fcols = []
-        for c in ['strain_raw', 'strain_diff', 'strain_zscore']:
-            if c in self.features.columns:
-                fcols.append(c)
-        if not any(c in self.features.columns for c in ['strain_raw', 'strain_diff']):
-            if 'strain' in self.data.columns:
-                self.features['strain_raw'] = self.data['strain']
-                fcols.append('strain_raw')
-        for c in ['ae_anomaly_score', 'ae_kurtosis', 'ae_peak']:
-            if c in self.features.columns:
-                fcols.append(c)
-        for c in ['fo_max_diff', 'fo_std']:
-            if c in self.features.columns:
-                fcols.append(c)
-        if len(fcols) < 2:
-            print('  [异常-IsolationForest] 特征不足，跳过')
-            return None
-        X = np.nan_to_num(self.features[fcols].values, nan=0.0)
-        preds = IsolationForest(contamination=0.05, random_state=42, n_estimators=100).fit_predict(X)
-        anomaly_if = preds == -1
-        print(f'  [异常-IsolationForest] 检测到 {np.sum(anomaly_if)} 个异常点 ({np.sum(anomaly_if)/len(anomaly_if)*100:.2f}%)')
+        """特征分组 + 独立检测：按传感器类型分组训练 Isolation Forest，再融合"""
+        n = len(self.data)
+        # 定义特征组
+        feature_groups = {
+            'strain': [c for c in ['strain_raw', 'strain_diff', 'strain_zscore', 'strain_ma', 'strain_std']
+                       if c in self.features.columns],
+            'ae': [c for c in self.features.columns if c.startswith('ae_') and c != 'ae_cumulative_energy_norm'],
+            'fo': [c for c in self.features.columns if c.startswith('fo_')]
+        }
+        # 如果特征组不足，回退到原有逻辑
+        active_groups = {k: v for k, v in feature_groups.items() if len(v) >= 2}
+        if not active_groups:
+            # 回退：混合所有可用特征
+            fcols = []
+            for c in ['strain_raw', 'strain_diff', 'strain_zscore']:
+                if c in self.features.columns:
+                    fcols.append(c)
+            if not any(c in self.features.columns for c in ['strain_raw', 'strain_diff']):
+                if 'strain' in self.data.columns:
+                    self.features['strain_raw'] = self.data['strain']
+                    fcols.append('strain_raw')
+            for c in ['ae_anomaly_score', 'ae_kurtosis', 'ae_peak']:
+                if c in self.features.columns:
+                    fcols.append(c)
+            for c in ['fo_max_diff', 'fo_std']:
+                if c in self.features.columns:
+                    fcols.append(c)
+            if len(fcols) < 2:
+                print('  [异常-IsolationForest] 特征不足，跳过')
+                return None
+            X = np.nan_to_num(self.features[fcols].values, nan=0.0)
+            preds = IsolationForest(contamination=0.05, random_state=42, n_estimators=100).fit_predict(X)
+            anomaly_if = preds == -1
+        else:
+            # 每组独立训练，投票融合
+            votes = np.zeros((n, len(active_groups)), dtype=int)
+            for idx, (gname, gcols) in enumerate(active_groups.items()):
+                Xg = np.nan_to_num(self.features[gcols].values, nan=0.0)
+                # 每组使用独立的 contamination 估计
+                preds = IsolationForest(contamination=0.05, random_state=42, n_estimators=100).fit_predict(Xg)
+                votes[:, idx] = (preds == -1).astype(int)
+            # 至少 2 组投票一致视为异常
+            vote_sum = np.sum(votes, axis=1)
+            anomaly_if = vote_sum >= min(2, len(active_groups))
+        print(f'  [异常-IsolationForest] 特征组={list(active_groups.keys())}, '
+              f'检测到 {np.sum(anomaly_if)} 个异常点 ({np.sum(anomaly_if)/n*100:.2f}%)')
         self.anomalies['isolation_forest'] = anomaly_if
         return anomaly_if
 
@@ -499,19 +627,43 @@ class AnomalyDetector:
         self.detect_fo_anomaly()
         self.detect_isolation_forest()
         n = len(self.data)
-        sa = [self.anomalies[k] for k in ['strain', 'ae', 'fo'] if k in self.anomalies and self.anomalies[k] is not None]
-        if not sa:
+        # 阶段感知权重：不同阶段各传感器的可靠性不同
+        # Phase 0 (健康期): AE最敏感(0.5), 应变(0.3), 光纤(0.2)
+        # Phase 1 (微损伤): AE(0.4), 应变(0.4), 光纤(0.2)
+        # Phase 2 (扩展期): 应变(0.5), AE(0.3), 光纤(0.2)
+        # Phase 3 (失效期): 应变(0.6), 光纤(0.3), AE(0.1)
+        stage_weights = {
+            0: {'strain': 0.3, 'ae': 0.5, 'fo': 0.2},
+            1: {'strain': 0.4, 'ae': 0.4, 'fo': 0.2},
+            2: {'strain': 0.5, 'ae': 0.3, 'fo': 0.2},
+            3: {'strain': 0.6, 'ae': 0.1, 'fo': 0.3},
+        }
+        # 获取可用传感器列表
+        available = [k for k in ['strain', 'ae', 'fo'] if k in self.anomalies and self.anomalies[k] is not None]
+        if not available:
             self.fused_anomalies = np.zeros(n, dtype=bool)
             return self.fused_anomalies
-        sv = np.sum(sa, axis=0)
-        high_conf = sv >= 2
-        med_conf = np.zeros(n, dtype=bool)
+        # 计算加权融合得分
+        weighted_score = np.zeros(n, dtype=float)
+        for i in range(n):
+            stage = self.stages[i] if self.stages is not None else 1
+            weights = stage_weights.get(stage, stage_weights[1])
+            total_w = 0.0
+            for k in available:
+                weighted_score[i] += weights[k] * self.anomalies[k][i]
+                total_w += weights[k]
+            if total_w > 0:
+                weighted_score[i] /= total_w
+        # 阈值：加权得分 >= 0.5 视为异常
+        self.fused_anomalies = weighted_score >= 0.5
+        # Isolation Forest 辅助：与加权结果共同标记
         if 'isolation_forest' in self.anomalies and self.anomalies['isolation_forest'] is not None:
-            for k in ['strain', 'ae', 'fo']:
-                if k in self.anomalies and self.anomalies[k] is not None:
-                    med_conf |= self.anomalies[k] & self.anomalies['isolation_forest']
-        self.fused_anomalies = high_conf | med_conf
-        print(f'  [异常-融合] 最终异常点: {np.sum(self.fused_anomalies)} 个 ({np.sum(self.fused_anomalies)/n*100:.2f}%)')
+            if_agree = np.zeros(n, dtype=bool)
+            for k in available:
+                if_agree |= self.anomalies[k] & self.anomalies['isolation_forest']
+            # IF 与至少一个传感器同时标记，且加权得分接近阈值(>=0.3)时也标记
+            self.fused_anomalies |= if_agree & (weighted_score >= 0.3)
+        print(f'  [异常-融合] 阶段感知加权融合, 最终异常点: {np.sum(self.fused_anomalies)} 个 ({np.sum(self.fused_anomalies)/n*100:.2f}%)')
         return self.fused_anomalies
 
 # ============================================================
@@ -1052,7 +1204,7 @@ def process_group(group_id):
     features = fe.extract_all()
     sd = StageDivider(data, features)
     stages = sd.fuse_stages()
-    ad = AnomalyDetector(data, features)
+    ad = AnomalyDetector(data, features, stages=stages)
     anomalies = ad.fuse_anomalies()
     viz = Visualizer(group_id, data, features, stages, ad.anomalies)
     viz.plot_timeseries(); viz.plot_stages(); viz.plot_anomalies()
