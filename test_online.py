@@ -10,7 +10,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
 
 import argparse
-from multi_source_shm import StreamProcessor
+from shm import StreamProcessor
 import numpy as np
 
 # 命令行参数
@@ -37,12 +37,12 @@ while proc.simulator.has_next() and count < args.max_points:
         break
     count += 1
     if count in [1, 50, 100, 150, 200, 250, 300, 500, 800, 1000, 1200, 1500]:
-        ae_raw_str = f'{result["ae_energy_raw"]:.0f}' if result["ae_energy_raw"] is not None else 'N/A'
-        fo_raw_str = f'{result["fo_mean_raw"]:.2f}' if result["fo_mean_raw"] is not None else 'N/A'
+        ae_str = f'{result["ae_energy"]:.6f}'
+        fo_str = f'{result["fo_mean"]:.6f}'
         spike_str = f'{result["ae_spike_rate"]:.4f}' if result["ae_spike_rate"] is not None else 'N/A'
         print(f'  点{result["index"]:>5d}: 阶段={result["stage"]}, '
               f'应变={result["strain"]:.4f}, 异常={result["anomaly"]}, '
-              f'AE原始能量={ae_raw_str}, FO原始均值={fo_raw_str}, '
+              f'AE累积能量={ae_str}, FO均值={fo_str}, '
               f'AE尖峰率={spike_str}')
 
 # 直接从 stages 列表计算阶段分布

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在线结构健康监测 - 组 {{GROUP_ID}}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+h1 { font-size: 1.5rem; margin-bottom: 16px; color: #38bdf8; display: flex; align-items: center; gap: 12px; }
+h1 small { font-size: 0.9rem; color: #94a3b8; font-weight: normal; }
+.dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1400px; margin: 0 auto; }
+.card { background: #1e293b; border-radius: 12px; padding: 16px; border: 1px solid #334155; }
+.card h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 12px; }
+.card.full { grid-column: 1 / -1; }
+.chart-container { position: relative; height: 200px; }
+.info-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.info-item { text-align: center; padding: 12px; background: #0f172a; border-radius: 8px; }
+.info-item .label { font-size: 0.75rem; color: #64748b; }
+.info-item .value { font-size: 1.5rem; font-weight: bold; color: #38bdf8; }
+.info-item .value.phase-0 { color: #22c55e; }
+.info-item .value.phase-1 { color: #eab308; }
+.info-item .value.phase-2 { color: #f97316; }
+.info-item .value.phase-3 { color: #ef4444; }
+.log-panel { height: 150px; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.75rem; background: #0f172a; border-radius: 8px; padding: 8px; }
+.log-panel div { padding: 2px 0; border-bottom: 1px solid #1e293b; }
+.log-panel .phase-transition { color: #fbbf24; font-weight: bold; }
+.log-panel .anomaly { color: #ef4444; }
+.log-panel .info { color: #94a3b8; }
+</style>
+</head>
+<body>
+<h1>🛰️ 在线结构健康监测 <small>组 {{GROUP_ID}} · 实时流式处理</small></h1>
+<div class="dashboard">
+  <div class="card full">
+    <div class="info-grid">
+      <div class="info-item"><div class="label">当前阶段</div><div class="value" id="currentPhase">0</div></div>
+      <div class="info-item"><div class="label">处理进度</div><div class="value" id="progress">0%</div></div>
+      <div class="info-item"><div class="label">异常点数</div><div class="value" id="anomalyCount">0</div></div>
+      <div class="info-item"><div class="label">数据点数</div><div class="value" id="pointCount">0</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>📈 应变时序</h2>
+    <div class="chart-container"><canvas id="strainChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>📊 阶段分布</h2>
+    <div class="chart-container"><canvas id="stageChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>🔊 AE累积能量</h2>
+    <div class="chart-container"><canvas id="aeChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>🔵 FO均值偏移</h2>
+    <div class="chart-container"><canvas id="foChart"></canvas></div>
+  </div>
+  <div class="card full">
+    <h2>📋 运行日志</h2>
+    <div class="log-panel" id="logPanel"><div class="info">等待数据...</div></div>
+  </div>
+</div>
+<script>
+const groupId = '{{GROUP_ID}}';
+const phaseNames = ['健康期', '微损伤萌生', '损伤扩展', '结构失效'];
+const phaseColors = ['#22c55e', '#eab308', '#f97316', '#ef4444'];
+
+const strainChart = new Chart(document.getElementById('strainChart'), {
+    type: 'scatter',
+    data: { datasets: [{ label: '应变', data: [], backgroundColor: '#38bdf8', pointRadius: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+        scales: { x: { title: { display: true, text: '时间点', color: '#94a3b8' }, grid: { color: '#334155' } },
+                 y: { title: { display: true, text: '归一化应变', color: '#94a3b8' }, grid: { color: '#334155' } } },
+        plugins: { legend: { labels: { color: '#e2e8f0' } } } }
+});
+
+const stageChart = new Chart(document.getElementById('stageChart'), {
+    type: 'bar',
+    data: { labels: ['健康期', '微损伤萌生', '损伤扩展', '结构失效'],
+            datasets: [{ label: '点数', data: [0,0,0,0], backgroundColor: ['#22c55e','#eab308','#f97316','#ef4444'] }] },
+    options: { responsive: true, maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, grid: { color: '#334155' } },
+                 x: { grid: { display: false } } },
+        plugins: { legend: { display: false } } }
+});
+
+const aeChart = new Chart(document.getElementById('aeChart'), {
+    type: 'line',
+    data: { datasets: [{ label: 'AE累积能量', data: [], borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,0.1)', fill: false, pointRadius: 0, borderWidth: 1.5 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+        scales: { x: { type: 'linear', title: { display: true, text: '时间点', color: '#94a3b8' }, grid: { color: '#334155' } },
+                 y: { title: { display: true, text: '累积能量', color: '#94a3b8' }, grid: { color: '#334155' } } },
+        plugins: { legend: { labels: { color: '#e2e8f0' } } },
+        animation: false,
+        parsing: false,
+        normalized: true }
+});
+
+const foChart = new Chart(document.getElementById('foChart'), {
+    type: 'line',
+    data: { datasets: [{ label: 'FO均值', data: [], borderColor: '#22d3ee', backgroundColor: 'rgba(34,211,238,0.1)', fill: false, pointRadius: 0, borderWidth: 1.5 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+        scales: { x: { type: 'linear', title: { display: true, text: '时间点', color: '#94a3b8' }, grid: { color: '#334155' } },
+                 y: { title: { display: true, text: 'FO均值', color: '#94a3b8' }, grid: { color: '#334155' } } },
+        plugins: { legend: { labels: { color: '#e2e8f0' } } },
+        animation: false,
+        parsing: false,
+        normalized: true }
+});
+
+const evtSource = new EventSource('/stream');
+let pointCount = 0, anomalyCount = 0;
+const stageCounts = [0, 0, 0, 0];
+const MAX_POINTS = 500;
+let lastStage = -1;
+// 节流：每 N 个点才更新一次折线图（不影响日志和柱状图）
+let chartThrottle = 0;
+const CHART_SKIP = 2; // 每2个点更新一次折线图
+
+evtSource.onmessage = function(e) {
+    if (e.data.startsWith(':')) return;
+    const data = JSON.parse(e.data);
+    if (data.type === 'meta') return;
+    pointCount++;
+    document.getElementById('pointCount').textContent = pointCount;
+    document.getElementById('progress').textContent = (data.progress * 100).toFixed(1) + '%';
+
+    // 阶段变更时立即更新显示
+    if (data.stage !== undefined && data.stage !== lastStage) {
+        lastStage = data.stage;
+        const phaseEl = document.getElementById('currentPhase');
+        phaseEl.textContent = phaseNames[data.stage] || '未知';
+        phaseEl.className = 'value phase-' + data.stage;
+        stageCounts[data.stage]++;
+        stageChart.data.datasets[0].data = stageCounts;
+        stageChart.update('none');
+    } else if (data.stage !== undefined) {
+        stageCounts[data.stage]++;
+        if (pointCount % 10 === 0) {
+            stageChart.data.datasets[0].data = stageCounts;
+            stageChart.update('none');
+        }
+    }
+
+    if (data.anomaly) {
+        anomalyCount++;
+        document.getElementById('anomalyCount').textContent = anomalyCount;
+    }
+
+    // 折线图节流更新（仅跳过图表更新，不影响日志）
+    chartThrottle++;
+    const shouldUpdateChart = (chartThrottle % CHART_SKIP === 0);
+    
+    if (shouldUpdateChart && data.strain !== undefined && data.strain !== null) {
+        const ds = strainChart.data.datasets[0].data;
+        ds.push({ x: data.index, y: data.strain });
+        if (ds.length > MAX_POINTS) ds.shift();
+        strainChart.update('none');
+    }
+    if (shouldUpdateChart && data.ae_energy !== undefined && data.ae_energy !== null) {
+        const ds = aeChart.data.datasets[0].data;
+        ds.push({ x: data.index, y: data.ae_energy });
+        if (ds.length > MAX_POINTS) ds.shift();
+        aeChart.update('none');
+    }
+    if (shouldUpdateChart && data.fo_mean !== undefined && data.fo_mean !== null) {
+        const ds = foChart.data.datasets[0].data;
+        ds.push({ x: data.index, y: data.fo_mean });
+        if (ds.length > MAX_POINTS) ds.shift();
+        foChart.update('none');
+    }
+
+    // 日志面板 — 不受节流影响，每个点都处理
+    const log = document.getElementById('logPanel');
+    const entry = document.createElement('div');
+    if (data.stage !== undefined && data.stage > 0 && pointCount > 1) {
+        entry.className = 'phase-transition';
+        entry.textContent = `[点${data.index}] 阶段 → ${phaseNames[data.stage]}`;
+    } else if (data.anomaly) {
+        entry.className = 'anomaly';
+        entry.textContent = `[点${data.index}] ⚠ 异常: 应变=${data.strain?.toFixed(4)}`;
+    } else {
+        entry.className = 'info';
+        if (data.index % 500 === 0) {
+            entry.textContent = `[点${data.index}] 进度 ${(data.progress*100).toFixed(1)}% · 阶段 ${data.stage}`;
+        } else {
+            return;
+        }
+    }
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+};
+evtSource.onerror = function() {
+    const log = document.getElementById('logPanel');
+    const entry = document.createElement('div');
+    entry.className = 'anomaly';
+    entry.textContent = '[!] 连接断开，尝试重连...';
+    log.appendChild(entry);
+};
+</script>
+</body>
+</html>

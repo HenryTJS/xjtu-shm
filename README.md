@@ -12,31 +12,31 @@
 
 ## 2. 数据概况（001-027）
 
-| 组号 | 应变数据 | 声发射(AE)数据 | 光纤(FO)数据 | 数据量级 | 关键特征 |
-| ---- | -------- | -------------- | ------------ | -------- | -------- |
-| 001-015 | 各组的应变.csv | 各组的声发射.csv | 各组的光纤.csv | ~30k-50k | 部分组缺少光纤或声发射数据 |
-| 016 | 016应变.csv (50,120行) | 016声发射.csv (31,444行) | 016光纤.csv (50,228行) | ~50k | 应变均值7.6，最后段跳升至21.7；AE有474个Kurt>100事件；光纤5通道平稳 |
-| 017 | 017应变.csv (46,003行) | 017声发射.csv (46,568行) | 017光纤.csv (46,003行) | ~46k | 应变呈循环加载模式，最后段跳升至60.9；AE有989个Kurt>100事件；光纤s4通道剧烈交替振荡 |
-| 018 | 018应变.csv (35,216行) | 018声发射.csv (35,225行) | 018光纤.xlsx | ~35k | 应变均值18.4，最后段升至28.2；AE有493个Kurt>100事件；光纤仅1通道(Fiber_s1) |
-| 019 | 019应变.xlsx (39,989行) | 019声发射.csv (40,001行) | 019光纤.xlsx | ~40k | **关键故障组**：应变在t≈106s从0.1跳变至8.4，AE出现Kurtosis>1000的极端事件(均值379) |
-| 020 | 020应变.xlsx (58,893行) | 020声发射.csv (58,904行) | 020光纤.xlsx (58,893行) | ~59k | 应变均值36.5，前段26.9后段38.8；AE仅247个Kurt>100事件；光纤5通道大幅波动(-71~+47) |
-| 021-027 | 各组的应变.csv/xlsx | 各组的声发射.csv | 各组的光纤.csv/xlsx | ~30k-60k | 部分组缺少光纤数据 |
+| 组号    | 应变数据                | 声发射(AE)数据           | 光纤(FO)数据            | 数据量级 | 关键特征                                                                                  |
+| ------- | ----------------------- | ------------------------ | ----------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| 001-015 | 各组的应变.csv          | 各组的声发射.csv         | 各组的光纤.csv          | ~30k-50k | 部分组缺少光纤或声发射数据                                                                |
+| 016     | 016应变.csv (50,120行)  | 016声发射.csv (31,444行) | 016光纤.csv (50,228行)  | ~50k     | 应变均值7.6，最后段跳升至21.7；AE有474个Kurt>100事件；光纤5通道平稳                       |
+| 017     | 017应变.csv (46,003行)  | 017声发射.csv (46,568行) | 017光纤.csv (46,003行)  | ~46k     | 应变呈循环加载模式，最后段跳升至60.9；AE有989个Kurt>100事件；光纤s4通道剧烈交替振荡       |
+| 018     | 018应变.csv (35,216行)  | 018声发射.csv (35,225行) | 018光纤.xlsx            | ~35k     | 应变均值18.4，最后段升至28.2；AE有493个Kurt>100事件；光纤仅1通道(Fiber_s1)                |
+| 019     | 019应变.xlsx (39,989行) | 019声发射.csv (40,001行) | 019光纤.xlsx            | ~40k     | **关键故障组**：应变在t≈106s从0.1跳变至8.4，AE出现Kurtosis>1000的极端事件(均值379) |
+| 020     | 020应变.xlsx (58,893行) | 020声发射.csv (58,904行) | 020光纤.xlsx (58,893行) | ~59k     | 应变均值36.5，前段26.9后段38.8；AE仅247个Kurt>100事件；光纤5通道大幅波动(-71~+47)         |
+| 021-027 | 各组的应变.csv/xlsx     | 各组的声发射.csv         | 各组的光纤.csv/xlsx     | ~30k-60k | 部分组缺少光纤数据                                                                        |
 
 > **注意**：并非所有组都有完整的三类传感器数据。系统在运行时自动检测可用传感器，缺失的传感器通道会被跳过，不影响整体处理流程。
 
 ## 3. 当前离线架构的离线依赖分析
 
-| 模块 | 离线方法 | 问题 | 在线替代方案 |
-| ---- | -------- | ---- | ------------ |
-| `StageDivider._detect_strain_jump` | `np.percentile(sd, 99.5)` 全局百分位 | 需要全部数据才能计算 | 滑动窗口百分位 + 自适应阈值 |
-| `StageDivider.detect_strain_change_points` | `rpt.Binseg` 变点检测 | 需要完整序列，无法增量 | 状态机 + 局部跳变检测 |
-| `StageDivider.detect_ae_stages` | `rpt.Binseg` + `np.percentile(ce, 33/66)` | 需要完整累积能量曲线 | 累积能量斜率变化检测 |
-| `StageDivider.detect_fo_stages` | 前100点初始化 + 全局百分位阈值 | 依赖初始段 + 全局排序 | 滑动窗口统计量 + 自适应基线 |
-| `StageDivider.fuse_stages` | 全局排序跳变幅度分配阶段 | 需要所有跳变点才能排序 | 在线状态机：逐点决策 |
-| `AnomalyDetector.detect_strain_anomaly` | `np.percentile(sd, 99.5)` | 全局百分位 | 滑动窗口百分位 |
-| `AnomalyDetector.detect_ae_anomaly` | `np.mean(sc) + 3*np.std(sc)` | 全局统计量 | EWMA 在线均值和方差 |
-| `AnomalyDetector.detect_isolation_forest` | 批处理训练 | 需要全部数据 | 滑动窗口 Z-score 替代 |
-| `FeatureExtractor.extract_ae_features` | `cumsum().max()` 全局归一化 | 需要全局最大值 | 滑动窗口归一化 |
+| 模块                                         | 离线方法                                      | 问题                   | 在线替代方案                |
+| -------------------------------------------- | --------------------------------------------- | ---------------------- | --------------------------- |
+| `StageDivider._detect_strain_jump`         | `np.percentile(sd, 99.5)` 全局百分位        | 需要全部数据才能计算   | 滑动窗口百分位 + 自适应阈值 |
+| `StageDivider.detect_strain_change_points` | `rpt.Binseg` 变点检测                       | 需要完整序列，无法增量 | 状态机 + 局部跳变检测       |
+| `StageDivider.detect_ae_stages`            | `rpt.Binseg` + `np.percentile(ce, 33/66)` | 需要完整累积能量曲线   | 累积能量斜率变化检测        |
+| `StageDivider.detect_fo_stages`            | 前100点初始化 + 全局百分位阈值                | 依赖初始段 + 全局排序  | 滑动窗口统计量 + 自适应基线 |
+| `StageDivider.fuse_stages`                 | 全局排序跳变幅度分配阶段                      | 需要所有跳变点才能排序 | 在线状态机：逐点决策        |
+| `AnomalyDetector.detect_strain_anomaly`    | `np.percentile(sd, 99.5)`                   | 全局百分位             | 滑动窗口百分位              |
+| `AnomalyDetector.detect_ae_anomaly`        | `np.mean(sc) + 3*np.std(sc)`                | 全局统计量             | EWMA 在线均值和方差         |
+| `AnomalyDetector.detect_isolation_forest`  | 批处理训练                                    | 需要全部数据           | 滑动窗口 Z-score 替代       |
+| `FeatureExtractor.extract_ae_features`     | `cumsum().max()` 全局归一化                 | 需要全局最大值         | 滑动窗口归一化              |
 
 ## 4. 在线流式架构设计
 
@@ -114,6 +114,7 @@ class OnlineNormalizer:
 ```
 
 **关键设计**：
+
 - **预热期**（warmup=100）：前100点不归一化，待窗口积累足够数据
 - **局部 min-max**：仅基于最近200个点的最小/最大值，而非全局
 - **逐通道独立**：每个AE/FO通道有独立的滑动窗口缓冲区
@@ -148,20 +149,21 @@ class OnlineNormalizer:
 **关键设计**：
 
 1. **应变跳变检测（在线版）**：
+
    - 维护滑动窗口（w=200）的跳变幅度百分位
    - 当新点的 `|diff|` 超过窗口 99% 百分位 × 自适应系数，标记为跳变
    - 跳变幅度超过窗口应变范围 10% 才触发阶段跃迁
-
 2. **AE 累积能量斜率检测**：
+
    - 在线维护 `ae_cumulative_energy`（累加器）
    - 计算滑动窗口（w=100）内的能量斜率（差分均值）
    - 斜率持续上升超过阈值 → 触发阶段跃迁
-
 3. **FO 基线漂移检测**：
+
    - 使用 EWMA 估计在线基线：`baseline = α * x + (1-α) * baseline`
    - 当前值偏离基线超过 3×EWMA标准差 → 标记异常
-
 4. **自适应阈值（改造3）**：
+
    - 系统启动后先收集 **200点基线数据**
    - 基于基线统计量动态计算所有阈值：
      - **应变跳变阈值**：基于变异系数 × 3（下限0.15）
@@ -170,8 +172,8 @@ class OnlineNormalizer:
      - **冷却周期**：100~300点，基于应变变异系数动态调整
      - **跃迁阈值**：基于基线噪声水平，各阶段独立计算
    - 不同组的数据特性差异大，自适应阈值确保无需手动调参
-
 5. **融合决策**：
+
    - 不依赖全局排序，而是**逐点加权投票**
    - 各传感器独立输出"阶段跃迁置信度"
    - 加权融合后决定是否跃迁
@@ -184,7 +186,7 @@ class OnlineAnomalyDetector:
         self.strain_buffer = OnlineBuffer([50, 200])
         self.ae_score_buffer = OnlineBuffer([100, 500])
         self.fo_buffer = OnlineBuffer([50, 200])
-     
+   
     def update(self, strain_val, ae_score, fo_features):
         # 应变：滑动窗口 Z-score > 3.0
         strain_anom = self._zscore_test(strain_val, 'strain', w=50)
@@ -241,6 +243,7 @@ class ChunkedDataReader:
 ```
 
 **关键设计**：
+
 - **`pandas.read_csv(chunksize=1000)`**：惰性迭代器，每次只加载1000行到内存
 - **临时文件**：对齐后的数据写入 `.temp_{group_id}.csv`，处理完后自动清理
 - **内存安全**：`del data` 显式释放原始 DataFrame
@@ -274,16 +277,16 @@ class StreamSimulator:
 
 ### 4.3 在线特征提取
 
-| 离线特征 | 在线替代方案 |
-| -------- | ------------ |
-| `strain_ma` rolling(50).mean() | 滑动窗口均值（OnlineBuffer） |
+| 离线特征                         | 在线替代方案                   |
+| -------------------------------- | ------------------------------ |
+| `strain_ma` rolling(50).mean() | 滑动窗口均值（OnlineBuffer）   |
 | `strain_std` rolling(50).std() | 滑动窗口标准差（OnlineBuffer） |
-| `strain_diff` | 直接计算 `current - previous` |
-| `strain_cumdiff` | 累加器 `cumsum += diff` |
-| `ae_cumulative_energy` | 累加器 `cumsum += peak²` |
-| `ae_cumulative_energy_norm` | 滑动窗口归一化（窗口最大值） |
-| `ae_event_rate` | 滑动窗口计数 |
-| `fo_*_zscore` | 滑动窗口 Z-score |
+| `strain_diff`                  | 直接计算`current - previous` |
+| `strain_cumdiff`               | 累加器`cumsum += diff`       |
+| `ae_cumulative_energy`         | 累加器`cumsum += peak²`     |
+| `ae_cumulative_energy_norm`    | 滑动窗口归一化（窗口最大值）   |
+| `ae_event_rate`                | 滑动窗口计数                   |
+| `fo_*_zscore`                  | 滑动窗口 Z-score               |
 
 ### 4.4 实时可视化系统
 
@@ -307,6 +310,7 @@ class StreamSimulator:
 ```
 
 **技术选型**：
+
 - **后端**：Flask + SSE 推送
 - **前端**：Chart.js + 原生 JS
 - **数据流**：模拟器逐点推送 → 处理引擎 → SSE → 前端实时更新
@@ -407,7 +411,7 @@ def _compute_adaptive_thresholds(self):
     if strain_mean > 1e-6:
         cv = strain_std / strain_mean
         self.strain_jump_threshold = max(3.0 * cv, 0.15)
-    
+  
     # 2. AE斜率比阈值: 基于 (均值 + 3σ) / 均值，下限1.5
     if len(self.ae_slope_baseline) > 20:
         slope_arr = np.array(self.ae_slope_baseline)
@@ -415,15 +419,15 @@ def _compute_adaptive_thresholds(self):
         slope_std = float(np.std(slope_arr))
         self.ae_slope_ratio_threshold = max(
             (slope_mean + 3.0 * slope_std) / slope_mean, 1.5)
-    
+  
     # 3. FO漂移阈值: 基于 FO 变异系数 × 4，下限0.15
     if fo_mean > 1e-6:
         fo_cv = fo_std / fo_mean
         self.fo_drift_threshold = max(4.0 * fo_cv, 0.15)
-    
+  
     # 4. 冷却周期: 基于应变变异系数动态调整 (100~300)
     self.cooldown_period = int(max(100, min(300, 100 + base_cv * 1000)))
-    
+  
     # 5. 跃迁阈值: 基于基线噪声水平动态调整
     self.transition_thresholds = {
         0: max(0.15, min(0.50, 0.25 * noise_factor)),
@@ -457,42 +461,46 @@ def _decide_transition(self, strain_jump, ae_slope, fo_drift):
 
 ## 6. 文件结构
 
+> **【拆分】已将原 `multi_source_shm.py`（1455 行）拆分为模块化的 `shm` 包**，前端 HTML 也拆到独立模板文件，可读性大幅提升。
+
 ```
-multi_source_shm.py  (主程序文件)
+multi_source_shm.py  (兼容入口，仅 re-export shm 包，保留旧导入方式)
 
-# === 数据加载 ===
-class DataLoader:
-    """数据加载器：加载应变、AE、光纤数据，时间同步"""
+shm/                          # 主包
+├── __init__.py               # 导出主接口 + 入口函数
+├── config.py                 # 常量、路径、全局配置（集中管理所有阈值/窗口参数）
+├── data_loader.py            # DataLoader — 数据加载与时间同步
+├── online_buffer.py          # OnlineBuffer — 滑动窗口缓冲区
+├── normalizer.py             # OnlineNormalizer — 在线滑动窗口归一化（改造1）
+├── feature_extractor.py      # OnlineFeatureExtractor — 逐点特征提取
+├── stage_divider.py          # OnlineStageDivider — 阶段划分状态机（自适应阈值+注意力融合）
+├── anomaly_detector.py       # OnlineAnomalyDetector — 在线异常检测
+├── streaming.py              # ChunkedDataReader + StreamSimulator + StreamProcessor
+├── dashboard.py              # RealtimeDashboard — Flask SSE 实时仪表盘
+└── templates/
+    └── dashboard.html        # 前端 HTML 模板（Chart.js，从原 HTML_TEMPLATE 拆出）
+```
 
-# === 在线流式处理模块 ===
-class OnlineBuffer:
-    """滑动窗口缓冲区，支持多窗口大小"""
+**各模块职责：**
 
-class OnlineNormalizer:
-    """在线滑动窗口归一化（改造1：替代全局归一化）"""
+| 模块                         | 类/函数                    | 职责                                             |
+| ---------------------------- | -------------------------- | ------------------------------------------------ |
+| `config.py`                | 常量                       | 路径、默认组号、阈值、窗口、分块大小、仪表盘参数 |
+| `data_loader.py`           | `DataLoader`             | 加载应变、AE、光纤数据，时间同步                 |
+| `online_buffer.py`         | `OnlineBuffer`           | 滑动窗口缓冲区，支持多窗口大小                   |
+| `normalizer.py`            | `OnlineNormalizer`       | 在线滑动窗口归一化（改造1：替代全局归一化）      |
+| `feature_extractor.py`     | `OnlineFeatureExtractor` | 在线特征提取                                     |
+| `stage_divider.py`         | `OnlineStageDivider`     | 在线阶段划分状态机（含自适应阈值，改造3）        |
+| `anomaly_detector.py`      | `OnlineAnomalyDetector`  | 在线异常检测                                     |
+| `streaming.py`             | `ChunkedDataReader`      | 逐块数据读取器（改造2：替代全量加载）            |
+| `streaming.py`             | `StreamSimulator`        | 数据流模拟器（基于ChunkedDataReader）            |
+| `streaming.py`             | `StreamProcessor`        | 在线流式处理主引擎                               |
+| `dashboard.py`             | `RealtimeDashboard`      | 实时可视化仪表盘（Flask + SSE + Chart.js）       |
+| `templates/dashboard.html` | 前端模板                   | Chart.js 图表 + SSE 事件处理                     |
 
-class OnlineFeatureExtractor:
-    """在线特征提取"""
+**入口函数（位于 `shm/__init__.py`）：**
 
-class OnlineStageDivider:
-    """在线阶段划分状态机（含自适应阈值，改造3）"""
-
-class OnlineAnomalyDetector:
-    """在线异常检测"""
-
-class ChunkedDataReader:
-    """逐块数据读取器（改造2：替代全量加载）"""
-
-class StreamSimulator:
-    """数据流模拟器（基于ChunkedDataReader）"""
-
-class StreamProcessor:
-    """在线流式处理主引擎"""
-
-class RealtimeDashboard:
-    """实时可视化仪表盘（Flask + SSE + Chart.js）"""
-
-# === 入口函数 ===
+```python
 run_online_dashboard()    # 启动实时仪表盘
 run_online_processing()   # 批量在线处理（无界面）
 main()                    # 命令行入口
@@ -500,23 +508,26 @@ main()                    # 命令行入口
 
 ## 7. 实施步骤
 
-| 步骤 | 内容 | 状态 |
-| ---- | ---- | ---- |
-| 1 | 实现 `OnlineBuffer` 滑动窗口缓冲区 | ✅ 已完成 |
-| 2 | 实现 `OnlineFeatureExtractor` 在线特征提取 | ✅ 已完成 |
-| 3 | 实现 `OnlineStageDivider` 在线阶段划分状态机 | ✅ 已完成 |
-| 4 | 实现 `OnlineAnomalyDetector` 在线异常检测 | ✅ 已完成 |
-| 5 | 实现 `StreamSimulator` 数据流模拟器 | ✅ 已完成 |
-| 6 | 实现 `StreamProcessor` 流式处理主引擎 | ✅ 已完成 |
-| 7 | 实现 `RealtimeDashboard` 实时可视化仪表盘 | ✅ 已完成 |
-| 8 | 集成测试：对 016-020 运行在线流程 | ✅ 已完成 |
-| 9 | 清理离线代码和文档 | ✅ 已完成 |
-| **10** | **改造1：取消全局归一化 → `OnlineNormalizer` 滑动窗口归一化** | **✅ 已完成** |
-| **11** | **改造2：`ChunkedDataReader` 逐块流式读取替代全量加载** | **✅ 已完成** |
-| **12** | **改造3：自适应阈值（基线统计量动态计算）** | **✅ 已完成** |
-| **13** | **修复4：三源真正融合 — 应变虚高修复、FO Z-score保留漂移信号、AE多指标融合、注意力权重** | **✅ 已完成** |
-| **14** | **修复5：阶段跃迁过早 — 最小稳定期500点、基线500点、冷却300~800点、阈值大幅提高** | **✅ 已完成** |
+| 步骤         | 内容                                                                                                             | 状态                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------- |
+| 1            | 实现`OnlineBuffer` 滑动窗口缓冲区                                                                              | ✅ 已完成           |
+| 2            | 实现`OnlineFeatureExtractor` 在线特征提取                                                                      | ✅ 已完成           |
+| 3            | 实现`OnlineStageDivider` 在线阶段划分状态机                                                                    | ✅ 已完成           |
+| 4            | 实现`OnlineAnomalyDetector` 在线异常检测                                                                       | ✅ 已完成           |
+| 5            | 实现`StreamSimulator` 数据流模拟器                                                                             | ✅ 已完成           |
+| 6            | 实现`StreamProcessor` 流式处理主引擎                                                                           | ✅ 已完成           |
+| 7            | 实现`RealtimeDashboard` 实时可视化仪表盘                                                                       | ✅ 已完成           |
+| 8            | 集成测试：对 016-020 运行在线流程                                                                                | ✅ 已完成           |
+| 9            | 清理离线代码和文档                                                                                               | ✅ 已完成           |
+| **10** | **改造1：取消全局归一化 → `OnlineNormalizer` 滑动窗口归一化**                                           | **✅ 已完成** |
+| **11** | **改造2：`ChunkedDataReader` 逐块流式读取替代全量加载**                                                  | **✅ 已完成** |
+| **12** | **改造3：自适应阈值（基线统计量动态计算）**                                                                | **✅ 已完成** |
+| **13** | **修复4：三源真正融合 — 应变虚高修复、FO Z-score保留漂移信号、AE多指标融合、注意力权重**                  | **✅ 已完成** |
+| **14** | **修复5：阶段跃迁过早 — 最小稳定期500点、基线500点、冷却300~800点、阈值大幅提高**                         | **✅ 已完成** |
 | **15** | **修复6：Phase 2→3不触发 — AE event_rate上限从0.5降到0.3、spike检测门槛从0.05降到0.03、Phase 2阈值降低** | **✅ 已完成** |
+| **16** | **拆分：将 multi_source_shm.py（1455行）拆分为 shm 包，前端 HTML 拆到 templates/dashboard.html**           | **✅ 已完成** |
+| **17** | **拆分：创建 shm/__init__.py 导出主接口，保留 multi_source_shm.py 作为兼容入口**                     | **✅ 已完成** |
+| **18** | **拆分：更新 test_online.py 导入，验证拆分后系统正常运行**                                                 | **✅ 已完成** |
 
 ## 8. 运行方式
 
@@ -534,6 +545,7 @@ python multi_source_shm.py dashboard --group 021 --speed 10 --port 5002
 ```
 
 参数说明：
+
 - `--group`：组号（默认 016，支持 001-027 任意组号）
 - `--speed`：模拟速度倍率（默认 10）
 - `--port`：仪表盘端口（默认 5000）
@@ -569,6 +581,7 @@ python test_online.py --group 021 --max-points 2000
 > **所有 `'016'` 引用均为默认参数值，非硬编码限制。**
 >
 > 系统通过 `DataLoader` 动态构造文件路径，支持任意组号：
+>
 > - 数据目录结构：`{group_id}/{group_id}应变.csv`、`{group_id}/{group_id}声发射.csv`、`{group_id}/{group_id}光纤.csv`
 > - 支持 `.csv` 和 `.xlsx` 格式自动检测
 > - 缺失的传感器通道自动跳过，不影响处理流程
@@ -576,48 +589,74 @@ python test_online.py --group 021 --max-points 2000
 > 已验证可运行的组：016, 017, 018, 019, 020（有完整三传感器数据）
 > 理论上支持：001-027（取决于各组是否有对应的数据文件）
 
+### 8.5 代码导入方式（拆分后）
+
+> **【拆分】`multi_source_shm.py` 已拆分为 `shm` 包**，推荐新代码直接使用 `shm` 包：
+
+```python
+# 推荐：直接使用 shm 包
+from shm import StreamProcessor, RealtimeDashboard
+from shm import run_online_dashboard, run_online_processing
+
+# 兼容：旧导入方式依然可用（multi_source_shm.py 会 re-export shm 包）
+from multi_source_shm import StreamProcessor
+```
+
+命令行运行方式不变（`multi_source_shm.py` 仍为入口）：
+
+```bash
+# 实时仪表盘
+python multi_source_shm.py dashboard --group 016 --speed 10 --port 5000
+
+# 批量处理
+python multi_source_shm.py batch --groups 016 017 018 019 020 --speed 10
+
+# 快速测试
+python test_online.py --group 016 --max-points 600
+```
+
 ## 9. 算法参数说明
 
 ### 9.1 阶段划分参数（自适应）
 
-| 参数 | 值 | 说明 |
-| ---- | --- | ---- |
-| 应变滑动窗口 | 50, 100, 200, 500 | 多尺度窗口 |
-| AE能量窗口 | 50, 100, 200, 500 | 能量累积和斜率检测 |
-| FO均值窗口 | 50, 100, 200, 500 | 基线漂移检测 |
-| 基线采集期 | 500 点 | 用于计算自适应阈值（修复5：从200增加到500） |
-| 最小稳定期 | 500 点 | 前500点不允许任何跃迁（修复5新增） |
-| 最小阶段持续 | 300 点 | 每个阶段至少维持300点才能再次跃迁（修复5新增） |
-| 跃迁冷却期 | **自适应 300~800 点** | 基于应变变异系数动态调整（修复5：从100~300增加） |
-| Phase 0→1 阈值 | **自适应 0.40~0.70** | 基于基线噪声水平（修复5：从0.15~0.50提高） |
-| Phase 1→2 阈值 | **自适应 0.45~0.75** | 基于基线噪声水平（修复5：从0.20~0.60提高） |
-| Phase 2→3 阈值 | **自适应 0.40~0.70** | 基于基线噪声水平（修复6：从0.50~0.80降低，允许AE尖峰触发） |
-| 应变跳变阈值 | **自适应 CV×5（下限0.3，上限1.5）** | 基于应变变异系数（修复5：从CV×3/0.15提高） |
-| AE斜率比阈值 | **自适应 (均值+5σ)/均值（下限2.0，上限8.0）** | 基于AE基线斜率（修复5：从3σ/1.5提高） |
-| FO漂移阈值 | **自适应 FO-CV×6（下限0.3，上限1.0）** | 基于FO变异系数（修复5：从CV×4/0.15提高；修复6：上限从1.5降到1.0） |
+| 参数            | 值                                                   | 说明                                                               |
+| --------------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| 应变滑动窗口    | 50, 100, 200, 500                                    | 多尺度窗口                                                         |
+| AE能量窗口      | 50, 100, 200, 500                                    | 能量累积和斜率检测                                                 |
+| FO均值窗口      | 50, 100, 200, 500                                    | 基线漂移检测                                                       |
+| 基线采集期      | 500 点                                               | 用于计算自适应阈值（修复5：从200增加到500）                        |
+| 最小稳定期      | 500 点                                               | 前500点不允许任何跃迁（修复5新增）                                 |
+| 最小阶段持续    | 300 点                                               | 每个阶段至少维持300点才能再次跃迁（修复5新增）                     |
+| 跃迁冷却期      | **自适应 300~800 点**                          | 基于应变变异系数动态调整（修复5：从100~300增加）                   |
+| Phase 0→1 阈值 | **自适应 0.40~0.70**                           | 基于基线噪声水平（修复5：从0.15~0.50提高）                         |
+| Phase 1→2 阈值 | **自适应 0.45~0.75**                           | 基于基线噪声水平（修复5：从0.20~0.60提高）                         |
+| Phase 2→3 阈值 | **自适应 0.40~0.70**                           | 基于基线噪声水平（修复6：从0.50~0.80降低，允许AE尖峰触发）         |
+| 应变跳变阈值    | **自适应 CV×5（下限0.3，上限1.5）**           | 基于应变变异系数（修复5：从CV×3/0.15提高）                        |
+| AE斜率比阈值    | **自适应 (均值+5σ)/均值（下限2.0，上限8.0）** | 基于AE基线斜率（修复5：从3σ/1.5提高）                             |
+| FO漂移阈值      | **自适应 FO-CV×6（下限0.3，上限1.0）**        | 基于FO变异系数（修复5：从CV×4/0.15提高；修复6：上限从1.5降到1.0） |
 
 ### 9.2 异常检测参数
 
-| 参数 | 值 | 说明 |
-| ---- | --- | ---- |
-| 应变 Z-score 阈值 | 3.0 | 滑动窗口 |
-| 应变跳变百分位 | 99.5% | 滑动窗口 |
-| AE 异常分数阈值 | 均值+3σ | 滑动窗口 |
-| AE 峰度百分位 | 99% | 滑动窗口 |
-| FO 范围百分位 | 99% | 滑动窗口 |
-| FO 通道 Z-score 阈值 | 3.0 | 滑动窗口 |
+| 参数                 | 值       | 说明     |
+| -------------------- | -------- | -------- |
+| 应变 Z-score 阈值    | 3.0      | 滑动窗口 |
+| 应变跳变百分位       | 99.5%    | 滑动窗口 |
+| AE 异常分数阈值      | 均值+3σ | 滑动窗口 |
+| AE 峰度百分位        | 99%      | 滑动窗口 |
+| FO 范围百分位        | 99%      | 滑动窗口 |
+| FO 通道 Z-score 阈值 | 3.0      | 滑动窗口 |
 
 ### 9.3 在线归一化参数（改造1）
 
-| 参数 | 值 | 说明 |
-| ---- | --- | ---- |
+| 参数          | 值     | 说明                        |
+| ------------- | ------ | --------------------------- |
 | 预热期 warmup | 100 点 | 前100点不归一化，返回原始值 |
-| 归一化窗口 | 200 | 滑动 min-max 归一化窗口大小 |
-| 归一化范围 | [0, 1] | 局部 min-max 映射 |
+| 归一化窗口    | 200    | 滑动 min-max 归一化窗口大小 |
+| 归一化范围    | [0, 1] | 局部 min-max 映射           |
 
 ### 9.4 流式读取参数（改造2）
 
-| 参数 | 值 | 说明 |
-| ---- | --- | ---- |
-| 块大小 chunk_size | 1000 行 | 每批加载行数 |
-| 临时文件 | `.temp_{group_id}.csv` | 对齐后数据缓存，处理完自动删除 |
+| 参数              | 值                       | 说明                           |
+| ----------------- | ------------------------ | ------------------------------ |
+| 块大小 chunk_size | 1000 行                  | 每批加载行数                   |
+| 临时文件          | `.temp_{group_id}.csv` | 对齐后数据缓存，处理完自动删除 |
