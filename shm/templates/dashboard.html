@@ -23,6 +23,11 @@ h1 small { font-size: 0.9rem; color: #94a3b8; font-weight: normal; }
 .info-item .value.phase-1 { color: #eab308; }
 .info-item .value.phase-2 { color: #f97316; }
 .info-item .value.phase-3 { color: #ef4444; }
+.info-item .value.alert-0 { color: #22c55e; }
+.info-item .value.alert-1 { color: #eab308; }
+.info-item .value.alert-2 { color: #f97316; }
+.info-item .value.alert-3 { color: #ef4444; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: 0.4; } }
 .log-panel { height: 150px; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.75rem; background: #0f172a; border-radius: 8px; padding: 8px; }
 .log-panel div { padding: 2px 0; border-bottom: 1px solid #1e293b; }
 .log-panel .phase-transition { color: #fbbf24; font-weight: bold; }
@@ -35,10 +40,13 @@ h1 small { font-size: 0.9rem; color: #94a3b8; font-weight: normal; }
 <div class="dashboard">
   <div class="card full">
     <div class="info-grid">
-      <div class="info-item"><div class="label">当前阶段</div><div class="value" id="currentPhase">0</div></div>
+      <div class="info-item"><div class="label">当前阶段</div><div class="value" id="currentPhase">健康期</div></div>
       <div class="info-item"><div class="label">处理进度</div><div class="value" id="progress">0%</div></div>
       <div class="info-item"><div class="label">异常点数</div><div class="value" id="anomalyCount">0</div></div>
       <div class="info-item"><div class="label">数据点数</div><div class="value" id="pointCount">0</div></div>
+      <div class="info-item"><div class="label">预警状态</div><div class="value alert-0" id="alertLevel">正常</div></div>
+      <div class="info-item"><div class="label">连续异常</div><div class="value" id="anomalyRun">0</div></div>
+      <div class="info-item"><div class="label">异常率(100点)</div><div class="value" id="anomalyRate">0%</div></div>
     </div>
   </div>
   <div class="card">
@@ -149,6 +157,20 @@ evtSource.onmessage = function(e) {
         document.getElementById('anomalyCount').textContent = anomalyCount;
     }
 
+    // 实时预警状态（预警级别 0正常/1注意/2警告/3严重）
+    if (data.alert_level !== undefined) {
+        const alertNames = ['正常', '注意', '警告', '严重'];
+        const alertEl = document.getElementById('alertLevel');
+        alertEl.textContent = alertNames[data.alert_level] || '正常';
+        alertEl.className = 'value alert-' + (data.alert_level || 0);
+    }
+    if (data.anomaly_run !== undefined) {
+        document.getElementById('anomalyRun').textContent = data.anomaly_run;
+    }
+    if (data.anomaly_rate !== undefined) {
+        document.getElementById('anomalyRate').textContent = (data.anomaly_rate * 100).toFixed(1) + '%';
+    }
+
     // 折线图节流更新（仅跳过图表更新，不影响日志）
     chartThrottle++;
     const shouldUpdateChart = (chartThrottle % CHART_SKIP === 0);
@@ -175,6 +197,16 @@ evtSource.onmessage = function(e) {
     // 日志面板 — 不受节流影响，每个点都处理
     const log = document.getElementById('logPanel');
     const entry = document.createElement('div');
+    // 预警升级日志（≥警告级记录一次）
+    if (data.alert_level !== undefined && data.alert_level >= 2 && data.alert_level > (window._lastAlert || 0)) {
+        window._lastAlert = data.alert_level;
+        const alertNames = ['正常', '注意', '警告', '严重'];
+        const entry2 = document.createElement('div');
+        entry2.className = 'anomaly';
+        entry2.textContent = `[点${data.index}] 🚨 ${alertNames[data.alert_level]}预警: 连续异常${data.anomaly_run} 异常率${(data.anomaly_rate*100).toFixed(1)}%`;
+        log.appendChild(entry2);
+        log.scrollTop = log.scrollHeight;
+    }
     if (data.stage !== undefined && data.stage > 0 && pointCount > 1) {
         entry.className = 'phase-transition';
         entry.textContent = `[点${data.index}] 阶段 → ${phaseNames[data.stage]}`;

@@ -16,7 +16,8 @@ import numpy as np
 from .online_buffer import OnlineBuffer
 from .config import (BASELINE_LENGTH, MIN_STABLE_POINTS, MIN_PHASE_DURATION,
                      COOLDOWN_DEFAULT, TRANSITION_THRESHOLDS,
-                     STRAIN_JUMP_THRESHOLD, AE_SLOPE_RATIO_THRESHOLD, FO_DRIFT_THRESHOLD)
+                     STRAIN_JUMP_THRESHOLD, AE_SLOPE_RATIO_THRESHOLD, FO_DRIFT_THRESHOLD,
+                     ANOMALY_TRANSITION_MIN, ANOMALY_TRANSITION_FULL, PHASE3_CONFIRM_POINTS)
 
 
 class OnlineStageDivider:
@@ -48,6 +49,10 @@ class OnlineStageDivider:
         self.fo_warm_count = 0
         # 跃迁控制
         self.transition_cooldown = 0
+        # 连续异常点计数（阶段跃迁依据之一）
+        self.consecutive_anomalies = 0
+        # 融合分数超阈值窗口（Phase3 进入确认：最近 N 点超阈值比例）
+        self.high_conf_window = []
         # ========== 改造3: 自适应阈值 ==========
         # 基线统计量（warm-up 阶段收集）
         self.strain_baseline_values = []      # 应变基线值列表
@@ -192,7 +197,7 @@ class OnlineStageDivider:
         self.transition_thresholds = {
             0: max(0.40, min(0.70, 0.50 * noise_factor)),
             1: max(0.45, min(0.75, 0.55 * noise_factor)),
-            2: max(0.40, min(0.70, 0.50 * noise_factor)),  # Phase 2 阈值降低，允许 AE 尖峰触发 Phase 3
+            2: max(0.45, min(0.70, 0.55 * noise_factor)),  # 配合窗口确认，避免过早进入失效期(Phase3 过长)
         }
 
     def _detect_strain_jump(self, strain_val, features):
@@ -305,8 +310,21 @@ class OnlineStageDivider:
             return min((offset - self.fo_drift_threshold * 1.5) / 1.0, 1.0)
         return 0.0
 
-    def _decide_transition(self, strain_conf, ae_conf, fo_conf):
-        """注意力机制动态权重融合：根据各源当前置信度动态调整权重"""
+    def _detect_anomaly_transition(self):
+        """连续异常点作为阶段跃迁依据之一。
+
+        连续 N 个点被判定为异常 → 系统进入不稳定/失效状态。
+        连续异常 >= ANOMALY_TRANSITION_MIN(≈10s) 开始贡献置信度，
+        达到 ANOMALY_TRANSITION_FULL(≈30s) 时满置信度。
+        """
+        if self.consecutive_anomalies < ANOMALY_TRANSITION_MIN:
+            return 0.0
+        span = max(ANOMALY_TRANSITION_FULL - ANOMALY_TRANSITION_MIN, 1)
+        return min((self.consecutive_anomalies - ANOMALY_TRANSITION_MIN) / span, 1.0)
+
+    def _decide_transition(self, strain_conf, ae_conf, fo_conf, anomaly_conf=0.0):
+        """注意力机制动态权重融合：根据各源当前置信度动态调整权重
+        新增 anomaly（连续异常）作为第4个阶段跃迁依据"""
         self.total_points += 1
         # ========== 修复5: 强制最小稳定期 ==========
         # 前 min_stable_points 点不允许任何跃迁，确保基线充分建立
@@ -315,13 +333,13 @@ class OnlineStageDivider:
         if self.transition_cooldown > 0:
             self.transition_cooldown -= 1
             return self.current_phase
-        # 基础权重（阶段先验）
-        base_weights = {0: {'strain': 0.4, 'ae': 0.35, 'fo': 0.25},
-                        1: {'strain': 0.25, 'ae': 0.50, 'fo': 0.25},
-                        2: {'strain': 0.35, 'ae': 0.40, 'fo': 0.25}}
+        # 基础权重（阶段先验）：加入 anomaly 项
+        base_weights = {0: {'strain': 0.35, 'ae': 0.30, 'fo': 0.20, 'anomaly': 0.15},
+                        1: {'strain': 0.20, 'ae': 0.40, 'fo': 0.20, 'anomaly': 0.20},
+                        2: {'strain': 0.30, 'ae': 0.30, 'fo': 0.20, 'anomaly': 0.20}}
         base_w = base_weights.get(self.current_phase, base_weights[1])
         # ========== 注意力机制：根据各源置信度动态调整权重 ==========
-        confs = {'strain': strain_conf, 'ae': ae_conf, 'fo': fo_conf}
+        confs = {'strain': strain_conf, 'ae': ae_conf, 'fo': fo_conf, 'anomaly': anomaly_conf}
         raw_attention = {k: max(v, 0.01) for k, v in confs.items()}
         total_att = sum(raw_attention.values())
         if total_att > 0:
@@ -335,37 +353,60 @@ class OnlineStageDivider:
                 w = {k: v / total_w for k, v in w.items()}
         else:
             w = base_w
-        fusion_score = strain_conf * w['strain'] + ae_conf * w['ae'] + fo_conf * w['fo']
+        fusion_score = (strain_conf * w['strain'] + ae_conf * w['ae'] +
+                        fo_conf * w['fo'] + anomaly_conf * w['anomaly'])
         # ========== 改造3: 使用自适应跃迁阈值 ==========
         threshold = self.transition_thresholds.get(self.current_phase, 0.50)
         # ========== 修复5: 每个阶段必须维持至少一定点数才能再次跃迁 ==========
         min_phase_duration = MIN_PHASE_DURATION  # 每个阶段至少维持 300 点
         points_in_phase = self.total_points - self.phase_entry_points.get(self.current_phase, 0)
-        if (fusion_score > threshold and self.current_phase < 3
+        # ========== 修复7: Phase3(失效期) 需窗口内超阈值比例确认，防止过早进入 ==========
+        above = fusion_score > threshold
+        self.high_conf_window.append(1.0 if above else 0.0)
+        if len(self.high_conf_window) > PHASE3_CONFIRM_POINTS:
+            self.high_conf_window.pop(0)
+        if self.current_phase == 2 and len(self.high_conf_window) >= PHASE3_CONFIRM_POINTS:
+            # 最近 PHASE3_CONFIRM_POINTS 点中 ≥50% 超阈值才进入失效期
+            confirm = sum(self.high_conf_window) / len(self.high_conf_window) >= 0.5
+        else:
+            confirm = True
+        if (above and self.current_phase < 3 and confirm
                 and points_in_phase >= min_phase_duration):
             self.current_phase += 1
             self.phase_entry_points[self.current_phase] = self.total_points
             self.transition_cooldown = self.cooldown_period
             print(f'    [阶段跃迁] Phase {self.current_phase - 1} → Phase {self.current_phase} '
                   f'(融合置信度: {fusion_score:.3f}, '
-                  f'应变:{strain_conf:.2f} AE:{ae_conf:.2f} FO:{fo_conf:.2f})')
+                  f'应变:{strain_conf:.2f} AE:{ae_conf:.2f} FO:{fo_conf:.2f} '
+                  f'异常:{anomaly_conf:.2f})')
         return self.current_phase
 
-    def update(self, strain_val, features):
+    def update(self, strain_val, features, anomaly=None):
+        """逐点更新阶段。
+
+        anomaly: OnlineAnomalyDetector 的融合异常判定（连续异常作为跃迁依据之一）
+        """
         # ========== 改造3: 在 update 中收集基线 ==========
         if not self.baseline_collected:
             self._collect_baseline(strain_val, features)
         if self.transition_cooldown > 0:
             self.transition_cooldown -= 1
         self._update_buffers(strain_val, features)
+
+        # 连续异常点计数（阶段跃迁依据之一）
+        if anomaly is not None:
+            self.consecutive_anomalies = self.consecutive_anomalies + 1 if anomaly else 0
+
         strain_conf = self._detect_strain_jump(strain_val, features)
         ae_conf = self._detect_ae_transition(features)
         fo_conf = self._detect_fo_drift(features)
-        phase = self._decide_transition(strain_conf, ae_conf, fo_conf)
+        anomaly_conf = self._detect_anomaly_transition()
+        phase = self._decide_transition(strain_conf, ae_conf, fo_conf, anomaly_conf)
         self.phase_history.append(phase)
         if len(self.debug_info) < 10000:
             self.debug_info.append({'strain_conf': strain_conf, 'ae_conf': ae_conf,
-                                    'fo_conf': fo_conf, 'phase': phase})
+                                    'fo_conf': fo_conf, 'anomaly_conf': anomaly_conf,
+                                    'phase': phase})
         return phase
 
     def get_stages(self):

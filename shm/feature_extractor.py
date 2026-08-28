@@ -109,11 +109,20 @@ class OnlineFeatureExtractor:
                 if buf.is_warm(100):
                     arr = buf.get_array(100)
                     if len(arr) >= 10:
-                        feats[f'{feat_name}_kurt'] = float(pd.Series(arr).kurtosis())
-                        feats[f'{feat_name}_skew'] = float(pd.Series(arr).skew())
-                        ma = float(np.mean(arr))
-                        if ma > 1e-10:
-                            feats[f'{feat_name}_impulse'] = abs(feats[feat_name]) / ma
+                        # 手算峰度/偏度（numpy，替代 pandas Series.kurtosis/skew，大幅提速）
+                        m = float(np.mean(arr))
+                        s = float(np.std(arr))
+                        if s > 1e-12:
+                            centered = (arr - m) / s
+                            feats[f'{feat_name}_kurt'] = float(np.mean(centered ** 4)) - 3.0  # 超额峰度
+                            feats[f'{feat_name}_skew'] = float(np.mean(centered ** 3))
+                        else:
+                            feats[f'{feat_name}_kurt'] = 0.0
+                            feats[f'{feat_name}_skew'] = 0.0
+                        if abs(m) > 1e-10:
+                            feats[f'{feat_name}_impulse'] = abs(feats[feat_name]) / abs(m)
+                        else:
+                            feats[f'{feat_name}_impulse'] = 0.0
         return feats
 
     def extract_fo(self, fo_dict):

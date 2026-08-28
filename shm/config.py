@@ -11,7 +11,7 @@ import os
 # 路径配置
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
+OUTPUT_DIR = os.path.join(BASE_DIR, 'live')
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -33,6 +33,10 @@ BASELINE_LENGTH = 500            # 基线收集长度
 MIN_STABLE_POINTS = 500          # 前 N 点不允许任何跃迁
 MIN_PHASE_DURATION = 300         # 每个阶段至少维持点数
 COOLDOWN_DEFAULT = 500           # 默认冷却周期
+# 连续异常作为阶段跃迁依据
+ANOMALY_TRANSITION_MIN = 100     # 连续异常 ≥N 点(≈10s) 开始贡献置信度
+ANOMALY_TRANSITION_FULL = 300    # 连续异常 ≥N 点(≈30s) 达到满置信度
+PHASE3_CONFIRM_POINTS = 100      # Phase2→3 确认窗口：最近 N 点中 ≥50% 融合超阈值才进入失效期，防止过早/过长
 # 默认跃迁阈值（Phase 2 阈值降低以允许 AE 尖峰触发 Phase 3）
 TRANSITION_THRESHOLDS = {0: 0.60, 1: 0.65, 2: 0.60}
 # 默认检测阈值

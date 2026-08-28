@@ -36,15 +36,20 @@ class ChunkedDataReader:
         self.chunk_size = chunk_size
         self._temp_file = None
         self._total_rows = 0
-        self._reader = None
-        self._current_chunk = None
-        self._chunk_index = 0
+        self._row_index = 0
         self._chunk_offset = 0
+        self._data = None
+        self._cols = []
+        self._col_idx = {}
         self.ae_cols = []
         self.fo_cols = []
+        # 松散对齐：本行某源无新数据(NaN)时保持上一值（不插值/不填空）
+        self._prev_strain = None
+        self._prev_ae = None
+        self._prev_fo = None
 
     def load_and_prepare(self):
-        """加载数据、对齐、保存为临时文件，返回总行数"""
+        """加载数据、对齐，转为内存 numpy 数组，返回总行数"""
         dl = DataLoader(self.group_id).load_all()
         data = dl.sync_timeline()
         if data is None:
@@ -53,50 +58,72 @@ class ChunkedDataReader:
         self._total_rows = len(data)
         self.ae_cols = [c for c in data.columns if c.startswith('ae_')]
         self.fo_cols = [c for c in data.columns if c.startswith('s') and len(c) <= 3 and c != 'strain']
-
-        # 保存为临时 CSV 文件（不包含归一化，保留原始值）
-        self._temp_file = os.path.join(BASE_DIR, f'.temp_{self.group_id}.csv')
-        data.to_csv(self._temp_file, index=False)
+        # 列名 → 索引映射（内存迭代用）
+        self._cols = list(data.columns)
+        self._col_idx = {c: i for i, c in enumerate(self._cols)}
+        # 转为内存 numpy 数组（跳过临时 CSV，消除 I/O 与逐块读取开销）
+        self._data = data.to_numpy(dtype=float)
+        self._row_index = 0
+        self._chunk_offset = 0
         print(f'  [ChunkedDataReader] 组 {self.group_id} 已准备: {self._total_rows} 点, '
-              f'AE通道={len(self.ae_cols)}, FO通道={len(self.fo_cols)}, '
-              f'分块大小={self.chunk_size}')
-
-        # 打开迭代器
-        self._reader = pd.read_csv(self._temp_file, chunksize=self.chunk_size)
-        self._load_next_chunk()
+              f'AE通道={len(self.ae_cols)}, FO通道={len(self.fo_cols)}')
         return self._total_rows
 
-    def _load_next_chunk(self):
-        """加载下一个数据块"""
-        try:
-            self._current_chunk = next(self._reader)
-            self._chunk_index = 0
-        except StopIteration:
-            self._current_chunk = None
-
     def read_row(self):
-        """读取下一行数据，返回 dict 或 None（已读完）"""
-        if self._current_chunk is None:
+        """读取下一行数据（numpy 数组行）或 None（已读完）"""
+        if self._data is None or self._row_index >= self._total_rows:
             return None
-        if self._chunk_index >= len(self._current_chunk):
-            self._load_next_chunk()
-            if self._current_chunk is None:
-                return None
-        row = self._current_chunk.iloc[self._chunk_index]
-        self._chunk_index += 1
+        row = self._data[self._row_index]
+        self._row_index += 1
         self._chunk_offset += 1
         return row
 
     def get_row_dict(self, row):
-        """将 pandas Series 转为标准 dict 格式"""
-        strain_val = float(row.get('strain', 0)) if row.get('strain') is not None else None
-        ae_dict = {col: float(row[col]) for col in self.ae_cols if col in row and not np.isnan(row[col])}
-        fo_dict = {col: float(row[col]) for col in self.fo_cols if col in row and not np.isnan(row[col])}
-        return {'index': self._chunk_offset - 1, 'time': float(row.get('time', self._chunk_offset - 1)),
+        """将 numpy 行转为标准 dict 格式。
+
+        松散对齐下，各源只在有真实数据的位置填值（其余 NaN）；
+        这里对本行无新数据的源做"保持上值"（事件流更新语义），
+        供在线逐点处理。
+        """
+        ci = self._col_idx
+        # 应变
+        if 'strain' in ci:
+            v = row[ci['strain']]
+            strain_val = None if np.isnan(v) else float(v)
+        else:
+            strain_val = None
+        if strain_val is not None:
+            self._prev_strain = strain_val
+        else:
+            strain_val = self._prev_strain
+        # AE（事件流：本行有事件则更新，否则保持上值）
+        ae_dict = {}
+        for col in self.ae_cols:
+            v = row[ci[col]]
+            if not np.isnan(v):
+                ae_dict[col] = float(v)
+        if ae_dict:
+            self._prev_ae = dict(ae_dict)
+        elif self._prev_ae is not None:
+            ae_dict = dict(self._prev_ae)
+        # FO（连续信号：本行有值则更新，否则保持上值）
+        fo_dict = {}
+        for col in self.fo_cols:
+            v = row[ci[col]]
+            if not np.isnan(v):
+                fo_dict[col] = float(v)
+        if fo_dict:
+            self._prev_fo = dict(fo_dict)
+        elif self._prev_fo is not None:
+            fo_dict = dict(self._prev_fo)
+        t = row[ci['time']] if 'time' in ci else float(self._chunk_offset - 1)
+        return {'index': self._chunk_offset - 1, 'time': float(t),
                 'strain': strain_val, 'ae': ae_dict, 'fo': fo_dict}
 
     def cleanup(self):
-        """清理临时文件"""
+        """释放内存（兼容旧临时文件清理）"""
+        if hasattr(self, '_data'):
+            self._data = None
         if self._temp_file and os.path.exists(self._temp_file):
             try:
                 os.remove(self._temp_file)
@@ -190,8 +217,11 @@ class StreamProcessor:
             # 计算原始 AE 总能量（所有通道的平方和）
             raw_ae_energy = sum(max(v, 0) ** 2 for v in point['ae'].values() if v is not None)
             features['raw_ae_total_energy'] = raw_ae_energy
-        stage = self.stage_divider.update(strain_norm, features)
-        anomaly = self.anomaly_detector.update(strain_norm, features, current_phase=stage)
+        # 连续异常作为阶段跃迁依据之一：
+        # 先算异常（用当前/上一阶段做阶段感知融合），再把异常传给阶段划分
+        anomaly = self.anomaly_detector.update(strain_norm, features,
+                                               current_phase=self.stage_divider.current_phase)
+        stage = self.stage_divider.update(strain_norm, features, anomaly=anomaly)
         self.results['time'].append(point['time'])
         self.results['strain'].append(strain_norm)
         self.results['stages'].append(stage)
@@ -206,8 +236,26 @@ class StreamProcessor:
             spike_thr = baseline + 1.5
             spikes = sum(1 for v in log_buf if v > spike_thr)
             ae_spike_rate = spikes / len(log_buf)
+        # ========== 阶段实时指示器 + 异常预警 ==========
+        phase_names = {0: '健康期', 1: '微损伤期', 2: '扩展期', 3: '失效期'}
+        phase_points = self.stage_divider.total_points - self.stage_divider.phase_entry_points.get(stage, 0)
+        anomaly_run = self.stage_divider.consecutive_anomalies
+        fused_hist = self.anomaly_detector.anomaly_history.get('fused', [])[-100:]
+        anomaly_rate = float(np.mean(fused_hist)) if fused_hist else 0.0
+        # 预警级别：0正常 / 1注意 / 2警告 / 3严重
+        if anomaly_run >= 300 or anomaly_rate >= 0.3:
+            alert_level = 3
+        elif anomaly_run >= 100 or anomaly_rate >= 0.15:
+            alert_level = 2
+        elif anomaly_run >= 20 or anomaly_rate >= 0.05:
+            alert_level = 1
+        else:
+            alert_level = 0
         return {'time': point['time'], 'index': point['index'], 'strain': strain_norm,
-                'stage': stage, 'anomaly': anomaly, 'progress': self.simulator.progress,
+                'stage': stage, 'phase_name': phase_names.get(stage, '未知'),
+                'phase_points': phase_points, 'anomaly': anomaly,
+                'anomaly_run': anomaly_run, 'anomaly_rate': anomaly_rate,
+                'alert_level': alert_level, 'progress': self.simulator.progress,
                 'ae_energy': ae_energy_val,
                 'ae_spike_rate': ae_spike_rate,
                 'fo_mean': fo_mean_val}  # 直接返回 FO 均值，像 strain 一样
@@ -229,8 +277,11 @@ class StreamProcessor:
                         pct = result['progress'] * 100
                         print(f'    进度: {result["index"]}/{self.simulator.total_points} ({pct:.1f}%) '
                               f'阶段={result["stage"]} 异常={result["anomaly"]}')
-                delay = 1.0 / self.speed_factor
-                time.sleep(delay)
+                # 实时模拟（按 1/speed_factor 秒/点 sleep）仅在需要可视化推送时启用，
+                # 例如仪表盘模式（callback 存在）。批量处理（无 callback）全速运行，
+                # 否则 016 组约 5 万点需 sleep 数十分钟，看起来像"卡死在低进度"。
+                if callback and self.speed_factor > 0:
+                    time.sleep(1.0 / self.speed_factor)
         finally:
             # 确保清理临时文件
             self.simulator.cleanup()
