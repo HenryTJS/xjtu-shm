@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 疲劳机多源监测数据对齐脚本（AE 网格模式）
-处理范围：试件 006-027
+处理范围：试件 010-014, 016-027（共 17 组，排除 006-009、015）
 
 对齐策略（以声发射事件为网格）：
 1. 时间统一：所有数据采样率 10Hz。光纤/应变时间戳统一换算到秒
@@ -28,7 +28,7 @@ OUT = os.path.join(ROOT, "aligned")   # 对齐输出直接放根目录 aligned\�
 OUT_D = OUT
 os.makedirs(OUT_D, exist_ok=True)
 
-SPECIMENS = [f"{i:03d}" for i in range(6, 28)]
+SPECIMENS = [f"{i:03d}" for i in range(10, 15)] + [f"{i:03d}" for i in range(16, 28)]
 # ==============================
 
 

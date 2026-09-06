@@ -17,10 +17,6 @@ import pandas as pd
 
 from .config import BASE_DIR, CHUNK_SIZE
 from .data_loader import DataLoader
-from .normalizer import OnlineNormalizer
-from .feature_extractor import OnlineFeatureExtractor
-from .stage_divider import OnlineStageDivider
-from .anomaly_detector import OnlineAnomalyDetector
 
 
 # ========== 改造2: StreamSimulator 改为逐块流式读取 ==========
@@ -98,10 +94,12 @@ class ChunkedDataReader:
             strain_val = self._prev_strain
         # AE（事件流：本行有事件则更新，否则保持上值）
         ae_dict = {}
+        ae_new = False
         for col in self.ae_cols:
             v = row[ci[col]]
             if not np.isnan(v):
                 ae_dict[col] = float(v)
+                ae_new = True
         if ae_dict:
             self._prev_ae = dict(ae_dict)
         elif self._prev_ae is not None:
@@ -118,7 +116,8 @@ class ChunkedDataReader:
             fo_dict = dict(self._prev_fo)
         t = row[ci['time']] if 'time' in ci else float(self._chunk_offset - 1)
         return {'index': self._chunk_offset - 1, 'time': float(t),
-                'strain': strain_val, 'ae': ae_dict, 'fo': fo_dict}
+                'strain': strain_val, 'ae': ae_dict, 'fo': fo_dict,
+                'ae_new': ae_new}
 
     def cleanup(self):
         """释放内存（兼容旧临时文件清理）"""
@@ -179,129 +178,3 @@ class StreamSimulator:
         self.reader.cleanup()
 
 
-class StreamProcessor:
-    """在线流式处理主引擎：协调各组件，逐点处理"""
-
-    def __init__(self, group_id, speed_factor=1.0):
-        self.group_id = group_id
-        self.speed_factor = speed_factor
-        self.simulator = StreamSimulator(group_id, speed_factor)
-        # ========== 改造1: 集成 OnlineNormalizer ==========
-        self.normalizer = OnlineNormalizer(warmup=100)
-        self.feature_extractor = OnlineFeatureExtractor()
-        self.stage_divider = OnlineStageDivider()
-        self.anomaly_detector = OnlineAnomalyDetector()
-        self.results = {'time': [], 'strain': [], 'stages': [], 'anomalies': []}
-
-    def load(self):
-        return self.simulator.load_data()
-
-    def process_step(self):
-        point = self.simulator.next_point()
-        if point is None:
-            return None
-        # ========== 改造1: 先在线归一化，再提取特征 ==========
-        # normalize_all 现在返回 (归一化应变, 原始应变, 归一化AE, 归一化FO)
-        strain_norm, strain_raw, ae_norm, fo_norm = self.normalizer.normalize_all(
-            point['strain'], point['ae'], point['fo'])
-        features = self.feature_extractor.extract_all(strain_norm, ae_norm, fo_norm)
-        # 将原始应变值存入 features，供阶段划分使用（避免归一化后 raw>0.85 虚高）
-        features['strain_raw_original'] = strain_raw if strain_raw is not None else strain_norm
-        # 将原始 FO 均值存入 features，供显示使用
-        if point['fo']:
-            fo_raw_values = [v for v in point['fo'].values() if v is not None]
-            if fo_raw_values:
-                features['fo_mean_raw'] = float(np.mean(fo_raw_values))
-        # ========== 修复5: 将原始 AE 值传入 features，用于能量累积 ==========
-        if point['ae']:
-            # 计算原始 AE 总能量（所有通道的平方和）
-            raw_ae_energy = sum(max(v, 0) ** 2 for v in point['ae'].values() if v is not None)
-            features['raw_ae_total_energy'] = raw_ae_energy
-        # 连续异常作为阶段跃迁依据之一：
-        # 先算异常（用当前/上一阶段做阶段感知融合），再把异常传给阶段划分
-        anomaly = self.anomaly_detector.update(strain_norm, features,
-                                               current_phase=self.stage_divider.current_phase)
-        stage = self.stage_divider.update(strain_norm, features, anomaly=anomaly)
-        self.results['time'].append(point['time'])
-        self.results['strain'].append(strain_norm)
-        self.results['stages'].append(stage)
-        self.results['anomalies'].append(anomaly)
-        # 返回原始值用于可视化显示 — 像 strain 一样，保证每个点都有值
-        ae_energy_val = features.get('ae_cumulative_energy', 0.0)  # 始终有值
-        fo_mean_val = features.get('fo_mean', 0.0)  # 始终有值（无FO数据时返回最近均值或0）
-        ae_spike_rate = None
-        if hasattr(self.stage_divider, '_ae_spike_log') and len(self.stage_divider._ae_spike_log) >= 200:
-            log_buf = self.stage_divider._ae_spike_log
-            baseline = float(np.percentile(log_buf, 30))
-            spike_thr = baseline + 1.5
-            spikes = sum(1 for v in log_buf if v > spike_thr)
-            ae_spike_rate = spikes / len(log_buf)
-        # ========== 阶段实时指示器 + 异常预警 ==========
-        phase_names = {0: '健康期', 1: '微损伤期', 2: '扩展期', 3: '失效期'}
-        phase_points = self.stage_divider.total_points - self.stage_divider.phase_entry_points.get(stage, 0)
-        anomaly_run = self.stage_divider.consecutive_anomalies
-        fused_hist = self.anomaly_detector.anomaly_history.get('fused', [])[-100:]
-        anomaly_rate = float(np.mean(fused_hist)) if fused_hist else 0.0
-        # 预警级别：0正常 / 1注意 / 2警告 / 3严重
-        if anomaly_run >= 300 or anomaly_rate >= 0.3:
-            alert_level = 3
-        elif anomaly_run >= 100 or anomaly_rate >= 0.15:
-            alert_level = 2
-        elif anomaly_run >= 20 or anomaly_rate >= 0.05:
-            alert_level = 1
-        else:
-            alert_level = 0
-        return {'time': point['time'], 'index': point['index'], 'strain': strain_norm,
-                'stage': stage, 'phase_name': phase_names.get(stage, '未知'),
-                'phase_points': phase_points, 'anomaly': anomaly,
-                'anomaly_run': anomaly_run, 'anomaly_rate': anomaly_rate,
-                'alert_level': alert_level, 'progress': self.simulator.progress,
-                'ae_energy': ae_energy_val,
-                'ae_spike_rate': ae_spike_rate,
-                'fo_mean': fo_mean_val}  # 直接返回 FO 均值，像 strain 一样
-
-    def run_all(self, callback=None):
-        print(f'\n>>> 在线流式处理: 组 {self.group_id}')
-        print(f'    数据总量: {self.simulator.total_points} 点')
-        print(f'    模拟速度: {self.simulator.speed_factor}x')
-        start_ts = time.time()
-        try:
-            while self.simulator.has_next():
-                result = self.process_step()
-                if result is None:
-                    break
-                if callback:
-                    callback(result)
-                else:
-                    if result['index'] % 1000 == 0:
-                        pct = result['progress'] * 100
-                        print(f'    进度: {result["index"]}/{self.simulator.total_points} ({pct:.1f}%) '
-                              f'阶段={result["stage"]} 异常={result["anomaly"]}')
-                # 实时模拟（按 1/speed_factor 秒/点 sleep）仅在需要可视化推送时启用，
-                # 例如仪表盘模式（callback 存在）。批量处理（无 callback）全速运行，
-                # 否则 016 组约 5 万点需 sleep 数十分钟，看起来像"卡死在低进度"。
-                if callback and self.speed_factor > 0:
-                    time.sleep(1.0 / self.speed_factor)
-        finally:
-            # 确保清理临时文件
-            self.simulator.cleanup()
-        elapsed = time.time() - start_ts
-        print(f'  [完成] 组 {self.group_id} 处理完毕, 耗时 {elapsed:.1f}s')
-        return self.get_results()
-
-    def get_results(self):
-        return {
-            'group_id': self.group_id,
-            'time': self.results['time'],
-            'strain': self.results['strain'],
-            'stages': self.results['stages'],
-            'anomalies': self.results['anomalies'],
-            'stage_counts': {
-                '0': int(np.sum(np.array(self.results['stages']) == 0)),
-                '1': int(np.sum(np.array(self.results['stages']) == 1)),
-                '2': int(np.sum(np.array(self.results['stages']) == 2)),
-                '3': int(np.sum(np.array(self.results['stages']) == 3)),
-            },
-            'anomaly_count': int(np.sum(self.results['anomalies'])),
-            'total_points': len(self.results['time']),
-        }
