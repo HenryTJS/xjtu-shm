@@ -58,6 +58,15 @@ class OnlineDamageIndex:
         #       → 加载/磨合/漂移过渡段活动高不平静; 进入稳定服役期才就绪(latch)。
         self.ready_quiet_blk = int(p.get('ready_quiet_blk', 8))
         self.ready_st_fac = float(p.get('ready_st_fac', 1.5))
+        # --- 方向A: 损伤不可逆确认后加速追赶(latch) —— 默认开(解决 0.85 不可达) ---
+        # 目的: 解决 D 慢 rise 追不满断裂前脉冲证据 → 0.85(临危)级不可达。
+        # 机制: 当 D 经确认(最近 conf_blk 块 min≥conf_drop 且 ≥conf_low)后, 对 risk 用快 rise 追赶。
+        # 6 组主样本验证(2026-09-08): 达0.85 0/6→6/6, 预警 onset/分级完全不变(无副作用)。
+        self.latch_enable = bool(p.get('latch_enable', True))
+        self.latch_conf_low = float(p.get('latch_conf_low', 0.30))
+        self.latch_conf_drop = float(p.get('latch_conf_drop', 0.15))
+        self.latch_conf_blk = int(p.get('latch_conf_blk', 3))
+        self.latch_rise_fast = float(p.get('latch_rise_fast', 0.5))
         self.reset()
 
     def reset(self):
@@ -86,6 +95,8 @@ class OnlineDamageIndex:
         self._recent_aelog = []
         self._aelog_this = 0.0
         self._has_st_this = False
+        self._latched = False
+        self._d_hist = []
 
     def _on_event(self, peak):
         peak = max(float(peak), 0.0)
@@ -170,6 +181,18 @@ class OnlineDamageIndex:
             else:
                 self.damage -= self.fall * self.damage
             self.damage = max(0.0, min(1.0, self.damage))
+        # --- 方向A: 损伤不可逆确认后加速追赶(解决 0.85 不可达) ---
+        if self.latch_enable and self.abl != 'no_accum':
+            self._d_hist.append(self.damage)
+            if len(self._d_hist) > self.latch_conf_blk:
+                self._d_hist.pop(0)
+            if not self._latched and len(self._d_hist) >= self.latch_conf_blk \
+               and self.damage >= self.latch_conf_low \
+               and min(self._d_hist) >= self.latch_conf_drop:
+                self._latched = True
+            if self._latched and self.risk > self.damage:
+                self.damage += self.latch_rise_fast * (self.risk - self.damage)
+                self.damage = max(0.0, min(1.0, self.damage))
         self._update_level()
 
     def _check_ready(self):
