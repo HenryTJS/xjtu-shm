@@ -10,12 +10,12 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings('ignore')
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根(含 shm)
+os.chdir(os.path.dirname(os.path.abspath(__file__)))                            # main/
 
 from shm.data_loader import DataLoader   # weaklabels 用
 
-ROOT = os.path.dirname(os.path.abspath(__file__))   # d:\lixiang
+ROOT = os.path.dirname(os.path.abspath(__file__))   # <项目根>\main
 GROUPS = ['016', '017', '018', '019', '020', '022']   # 主样本 6 组
 
 # ============================================================

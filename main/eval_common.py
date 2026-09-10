@@ -18,13 +18,13 @@ import numpy as np
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor
 
-sys.path.insert(0, r'd:\lixiang')
-os.chdir(r'd:\lixiang')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根(含 shm)
+os.chdir(os.path.dirname(os.path.abspath(__file__)))                            # main/
 from shm.streaming import StreamSimulator
 from shm.damage_index import OnlineDamageIndex
 
 GROUPS = ['016', '017', '018', '019', '020', '022']   # 主样本 6 组
-ROOT = r'd:\lixiang'
+ROOT = os.path.dirname(os.path.abspath(__file__))
 T7CACHE = os.path.join(ROOT, 'cache', '_t7_cache')
 REF_CSV = os.path.join(ROOT, 'weak_labels', 'labels_summary.csv')
 

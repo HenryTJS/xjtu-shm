@@ -560,15 +560,18 @@
       (f / (d.nfr - 1) * 100).toFixed(2) + '%,#132029 100%)';
     el.tlPct.textContent = (f / (d.nfr - 1) * 100).toFixed(1) + '%';
     el.tNow.textContent = fmtT(d.t[f]);
-    el.roIdx.textContent = Math.round(f * d.step + d.step);
-    var aeN = c.aeSum[f], foN = (f + 1) * (d.foCols.length || 0);
-    el.roAe.textContent = aeN;
+    // 统一口径: 已回放的【原始】采样点数(10Hz) = 帧数 × 降采样步长
+    var rawPts = Math.min(d.n, (f + 1) * d.step);
+    var nCh = d.foCols.length;
+    var aeN = c.aeSum[f];
+    el.roIdx.textContent = fmtNum(rawPts);
+    el.roAe.textContent = fmtNum(aeN);
     el.roRate.textContent = (S.playing ? (S.speed / FRAME_DT) : 0).toFixed(0) + ' /s';
-    el.hAEn.textContent = aeN;
-    el.hFOn.textContent = foN;
-    el.hSTn.textContent = f + 1;
-    el.hDIn.textContent = Math.floor((f + 1) * d.step / 500);
-    el.hFOc.textContent = d.foCols.length || '0';
+    el.hAEn.textContent = fmtNum(aeN) + ' 事件';
+    el.hFOn.textContent = nCh ? fmtNum(rawPts) + ' 点 × ' + nCh + ' 通道' : '—';
+    el.hSTn.textContent = fmtNum(rawPts) + ' 点';
+    el.hDIn.textContent = fmtNum(Math.floor(rawPts / 500)) + ' 块';
+    el.hFOc.textContent = nCh || '0';
     if (d.foCols.length) {
       el.hFOs.textContent = '在线'; el.hFOs.className = 'st ok';
     } else {
@@ -592,6 +595,10 @@
     t = Math.max(0, Math.round(t));
     var h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function fmtNum(v) {
+    return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
   /* ============================================================

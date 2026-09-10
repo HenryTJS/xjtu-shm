@@ -7,7 +7,9 @@
 """
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 项目根 = shm 的上级；主样本数据/产物在 <项目根>\main\ 下（2026-09-10 结构重组）
+_PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.join(_PROJ, 'main')
 
 # 主样本组（6 组，正式口径）
 DEFAULT_GROUPS = ['016', '017', '018', '019', '020', '022']

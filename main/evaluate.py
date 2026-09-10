@@ -18,13 +18,13 @@ plt.rcParams['axes.unicode_minus'] = False
 from concurrent.futures import ProcessPoolExecutor
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
-sys.path.insert(0, r'd:\lixiang')
-os.chdir(r'd:\lixiang')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根
+os.chdir(os.path.dirname(os.path.abspath(__file__)))                            # main/
 from shm.streaming import StreamSimulator
 from shm.damage_index import OnlineDamageIndex
 from eval_common import GROUPS, ref_map, onset_of, LOW, DROP, HOLD_FRAC
 
-ROOT = r'd:\lixiang'
+ROOT = os.path.dirname(os.path.abspath(__file__))
 DNCACHE = os.path.join(ROOT, 'cache', '_hi_cache')      # 逐点 D 缓存
 RESULTS = os.path.join(ROOT, 'results')
 FIGDIR = os.path.join(ROOT, 'figures')

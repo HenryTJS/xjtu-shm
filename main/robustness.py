@@ -18,14 +18,14 @@ plt.rcParams['axes.unicode_minus'] = False
 from concurrent.futures import ProcessPoolExecutor
 from scipy import stats as sp_stats
 
-sys.path.insert(0, r'd:\lixiang')
-os.chdir(r'd:\lixiang')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根
+os.chdir(os.path.dirname(os.path.abspath(__file__)))                            # main/
 from shm.streaming import StreamSimulator
 from shm.damage_index import OnlineDamageIndex
 from eval_common import (PARS, DEFAULT, GROUPS, cfg_id, T7CACHE,
                          per_group_metrics, run_cfg, table_for, summary_row)
 
-ROOT = r'd:\lixiang'
+ROOT = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(ROOT, 'results')
 FIGDIR = os.path.join(ROOT, 'figures')
 os.makedirs(RESULTS, exist_ok=True)
