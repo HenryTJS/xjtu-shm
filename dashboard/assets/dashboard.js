@@ -10,8 +10,9 @@
   'use strict';
 
   /* ---------------- 常量 ---------------- */
-  var FRAME_DT = 0.5;                 // 每帧代表的真实时长(s) —— 与导出 STEP=5 @10Hz 对应
-  var WIN = 1200;                     // 子面板滑动窗口(帧) = 600 s
+  var DEF_FRAME_DT = 0.5;             // 每帧代表的真实时间步:
+                                      //   主样本 = 0.5 s (STEP=5 @10Hz); L1 = 50 cycle(数据包自带 frameDt 覆盖)
+  var WIN = 1200;                     // 子面板滑动窗口(帧)
   var LV_COLORS = ['#00e39a', '#ffc93c', '#ff8a1f', '#ff3b47'];
   var LV_NAMES = ['正常', '注意', '预警', '临危'];
   var LV_DESC = [
@@ -20,28 +21,31 @@
     ['预警级 · 损伤加速扩展', 'D 越过 0.55，请安排停机检查'],
     ['临危级 · 逼近结构失效', 'D 越过 0.85，立即停机并隔离试件']
   ];
-  var FO_COLORS = ['#25d4f0', '#7c9dff', '#b07cff', '#ff9de2', '#5fe08a'];
+  var FO_COLORS = ['#25d4f0', '#7c9dff', '#b07cff', '#ff9de2', '#5fe08a',
+    '#ffd166', '#ef6f6c', '#8bd450', '#f78fb3', '#6ad4dd'];
   var C_D = '#25d4f0', C_RISK = '#ff8a1f', C_EST = '#00e39a', C_AE = '#ff8a1f';
 
   /* ---------------- 全局状态 ---------------- */
   var S = {
-    gid: null, data: null, frame: 0, playing: false, speed: 120,
+    gid: null, ds: null, data: null, frame: 0, playing: false, speed: 120,
     last: 0, dirty: true, muted: false, ac: null,
     warnIdx: 0, logCount: 0, booted: false,
+    unit: 's', frameDt: DEF_FRAME_DT, datasets: null, chanCells: null,
     acc: { ae: 0, fo: 0, st: 0 }, cache: {}
   };
 
   /* ---------------- DOM ---------------- */
   var $ = function (id) { return document.getElementById(id); };
   var el = {};
-  ['gidSel', 'sysState', 'sysStateText', 'clock', 'btnRun', 'btnReset', 'btnSound', 'sndText',
+  ['gidSel', 'dsSel', 'sysState', 'sysStateText', 'clock', 'btnRun', 'btnReset', 'btnSound', 'sndText',
     'speedSeg', 'seek', 'tlPct', 'tNow', 'tTotal', 'roIdx', 'roAe', 'roRate',
     'gaugeArc', 'gaugeMark25', 'gaugeMark55', 'gaugeMark85', 'dVal', 'dBadge', 'dMax', 'dLife',
     'dMargin', 'gaugeTag', 'tLv1', 'tLv2', 'tLv3', 'verdict', 'verdictSub',
     'barAE', 'barST', 'barRK', 'valAE', 'valST', 'valRK',
     'vAE', 'vFO', 'vST', 'vEV', 'logList', 'logCount', 'hAEn', 'hFOn', 'hSTn', 'hDIn',
-    'hFOc', 'hFOs', 'boot', 'bootText', 'cvTrend', 'cvAE', 'cvFO', 'cvST', 'cvEV',
-    'lgB2', 'lgB3'
+    'hFOc', 'hFOs', 'chanBody', 'equipRig', 'equipMode', 'tAE', 'tFO', 'tST', 'boot', 'bootText',
+    'dfosRow', 'tDF', 'vDF', 'cvDFHeat', 'cvDFProf',
+    'cvTrend', 'cvAE', 'cvFO', 'cvST', 'cvEV', 'lgB2', 'lgB3', 'lgC0', 'lgRef'
   ].forEach(function (k) { el[k] = $(k); });
 
   /* ============================================================
@@ -227,14 +231,21 @@
       c.ael = dec(d.ael, 1000);
       c.fo = {};
       for (var k in d.fo) c.fo[k] = dec(d.fo[k], 100);
-      // 应变滑动波动(std, 窗口 300 帧)
+      // DFOS 块级序列(L1 才有; 主样本无)
+      c.dloc = d.dfos ? dec(d.dfos.local, 100) : null;
+      c.dhi = d.dfos ? dec(d.dfos.hi, 1000) : null;
+      // DFOS 空间分布(×100 编码 → 解码为 με) 与基线
+      c.dfProf = (d.dfos && d.dfos.prof) ? dec(d.dfos.prof, 100) : null;
+      c.dfBase = (d.dfos && d.dfos.base) ? dec(d.dfos.base, 100) : null;
+      // 应变滑动波动(std, 窗口 300 帧) —— 仅连续采样源有意义
       c.stStd = rollingStd(c.st, 300);
-      // AE 事件率(次/秒) 与 累计前缀和(健康表用)
+      // AE 事件率(主样本 次/秒; L1 无"秒" → 次/帧) 与 累计前缀和(健康表用)
+      var rk = rateK();
       c.rate = new Float32Array(d.nfr);
       c.aeSum = new Float64Array(d.nfr);
       var run = 0;
       for (var q = 0; q < d.nfr; q++) {
-        c.rate[q] = d.aen[q] * 2;
+        c.rate[q] = d.aen[q] * rk;
         run += d.aen[q];
         c.aeSum[q] = run;
       }
@@ -271,6 +282,19 @@
     return out;
   }
 
+  /* ---- 时间基 / 单位自适应: 主样本 = 秒; L1 = cycle ---- */
+  /* 每帧推进的"播放步"。
+     主样本: = 数据包 frameDt (0.5 s/帧, 与 10Hz+STEP=5 对应)。
+     L1: 无实时概念, frameDt 是"50 cycle/帧"的语义值, 直接拿来做播放速率会使全程耗时
+         约 20 min → 改按**全长归一**: 默认 120× 时全长 ≈ 40 s (与主样本同量级)。 */
+  function frameDt() {
+    var d = S.data;
+    if (isCycle()) return d ? Math.max(0.15, 4800 / Math.max(1, d.nfr)) : DEF_FRAME_DT;
+    return (d && d.frameDt) || DEF_FRAME_DT;
+  }
+  function isCycle() { return S.unit === 'cycle'; }
+  function rateK() { return isCycle() ? 1 : 2; }   // 主样本 2 帧/s; L1 1 帧 = 50 cycle
+
   /* ============================================================
    *  三、渲染
    * ============================================================ */
@@ -285,6 +309,7 @@
     drawFO(d, c, f);
     drawST(d, c, f);
     drawEV(d, c, f);
+    drawDFOS(d, c, f);
     drawGauge(d, c, f);
     drawSide(d, c, f);
     drawStatus(d, c, f);
@@ -322,6 +347,21 @@
     if (showB3) vline(ctx, b, xOf(b3f), 'rgba(255,59,71,.55)', [5, 4], 'b3');
     if (el.lgB2) el.lgB2.style.display = showB2 ? '' : 'none';
     if (el.lgB3) el.lgB3.style.display = showB3 ? '' : 'none';
+
+    // c0(基线重定义终点) / 论文检测点(L1) —— 同样遵循"回放越过才出现"的在线语义
+    var c0f = d.meta.c0Pct != null ? W * d.meta.c0Pct / 100 : -1;
+    var showC0 = c0f > 0 && f >= c0f;
+    if (showC0) vline(ctx, b, xOf(c0f), 'rgba(0,227,154,.5)', [2, 3], 'c0');
+    if (el.lgC0) el.lgC0.style.display = showC0 ? '' : 'none';
+    var refs = d.meta.refs || [], showR = false;
+    refs.forEach(function (r) {
+      var rf = r.pct != null ? W * r.pct / 100 : -1;
+      if (rf > 0 && f >= rf) {
+        vline(ctx, b, xOf(rf), 'rgba(150,170,190,.4)', [1, 3], r.label || 'ref');
+        showR = true;
+      }
+    });
+    if (el.lgRef) el.lgRef.style.display = showR ? '' : 'none';
 
     // 已回放区域高亮 + 扫描光带(强化实时感)
     var cx0 = xOf(f);
@@ -391,11 +431,13 @@
     var o = prep(el.cvAE), ctx = o.ctx;
     var b = box(o.w, o.h, 26, 8, 6, 14);
     bg(ctx, b);
-    grid(ctx, b, 6, 2, function (t) { return (t * 5).toFixed(0); });
+    var aax = (d.ax && d.ax.ael) ? d.ax.ael : [-3.2, 1.05];
+    var LO = aax[0], HI = aax[1];
+    var rhi = (d.ax && d.ax.rate) || 6;
+    grid(ctx, b, 6, 2, function (t) { return (t * rhi).toFixed(0); });
     var w = win(d, f), i0 = w[0], i1 = w[1];
-    var LO = -3.2, HI = 1.05;
-    // 事件率柱(映射: N/秒 → 0..6)
-    plotBars(ctx, b, c.rate, i0, i1, 0, 6, C_AE);
+    // 事件率柱
+    plotBars(ctx, b, c.rate, i0, i1, 0, rhi, C_AE);
     // log 峰值
     hline(ctx, b, yOf(0, LO, HI, b), 'rgba(255,138,31,.22)', null, null);
     plotLine(ctx, b, c.ael, i0, i1, LO, HI, '#ffd08a', { width: 1.3, empty: -99.999, glow: 5 });
@@ -404,15 +446,16 @@
     ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     ctx.fillText('log10(峰值能量)', b.x + 3, b.y + b.h + 11);
     ctx.textAlign = 'right';
-    ctx.fillText('事件率 ×0.5/s', b.x + b.w, b.y + b.h + 11);
+    ctx.fillText(isCycle() ? '事件率 (次/帧)' : '事件率 ×0.5/s', b.x + b.w, b.y + b.h + 11);
   }
 
   /* ---- FBG ---- */
   function drawFO(d, c, f) {
     var o = prep(el.cvFO), ctx = o.ctx;
-    var b = box(o.w, o.h, 26, 8, 6, 14);
-    bg(ctx, b);
     var cols = Object.keys(c.fo);
+    var rows = Math.max(1, Math.ceil(cols.length / 5));
+    var b = box(o.w, o.h, 26, 8, 6, 6 + rows * 10);
+    bg(ctx, b);
     if (!cols.length) {
       ctx.fillStyle = '#3d5566';
       ctx.font = '11px "Cascadia Mono",Consolas,monospace';
@@ -435,20 +478,23 @@
       plotLine(ctx, b, c.fo[k], i0, i1, lo, hi, FO_COLORS[idx % FO_COLORS.length],
         { width: 1.3, glow: 4 });
     });
-    // 图例
+    // 图例(每行最多 5 个, 自动换行)
     ctx.font = '9px "Cascadia Mono",Consolas,monospace';
     ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     cols.forEach(function (k, idx) {
+      var x = b.x + 2 + (idx % 5) * Math.max(30, Math.min(64, b.w / 5));
+      var y = b.y + b.h + 5 + Math.floor(idx / 5) * 10;
       ctx.fillStyle = FO_COLORS[idx % FO_COLORS.length];
-      var x = b.x + 4 + idx * 34;
-      ctx.fillRect(x, b.y + b.h + 5, 7, 2);
-      ctx.fillText(k, x + 10, b.y + b.h + 11);
+      ctx.fillRect(x, y, 7, 2);
+      ctx.fillStyle = '#5b7288';
+      ctx.fillText(k, x + 10, y + 6);
     });
   }
 
   /* ---- 应变 ---- */
   function drawST(d, c, f) {
     var o = prep(el.cvST), ctx = o.ctx;
+    var dfos = !!c.dloc;
     var b = box(o.w, o.h, 26, 8, 6, 14);
     bg(ctx, b);
     var w = win(d, f), i0 = w[0], i1 = w[1];
@@ -457,18 +503,20 @@
     var lo = r[0] - pad, hi = r[1] + pad;
     grid(ctx, b, 6, 2, function (t) { return (lo + (hi - lo) * t).toFixed(0); });
     plotLine(ctx, b, c.st, i0, i1, lo, hi, C_EST, { width: 1.2, glow: 4 });
-    // 滑动波动(独立比例, 用右侧 1/3 高度)
-    var s2 = c.stStd, mx = 0;
-    for (var i = i0; i < i1; i++) if (s2[i] > mx) mx = s2[i];
+    // 第二曲线(独立比例): L1 = DFOS 块级局部峰; 主样本 = 应变滑动波动 σ
+    var s2 = dfos ? c.dloc : c.stStd, ii;
+    var mx = 0;
+    for (ii = i0; ii < i1; ii++) if (s2[ii] > mx) mx = s2[ii];
     mx = mx || 1;
-    plotLine(ctx, b, s2, i0, i1, 0, mx, 'rgba(176,124,255,.85)', { width: 1.2 });
-    ctx.fillStyle = '#5b7288';
+    plotLine(ctx, b, s2, i0, i1, 0, mx, 'rgba(176,124,255,.9)', { width: dfos ? 1.4 : 1.2 });
     ctx.font = '9px "Cascadia Mono",Consolas,monospace';
     ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     ctx.fillStyle = C_EST; ctx.fillRect(b.x + 4, b.y + b.h + 5, 7, 2);
-    ctx.fillStyle = '#5b7288'; ctx.fillText('应变', b.x + 14, b.y + b.h + 11);
-    ctx.fillStyle = 'rgba(176,124,255,.9)'; ctx.fillRect(b.x + 46, b.y + b.h + 5, 7, 2);
-    ctx.fillStyle = '#5b7288'; ctx.fillText('波动 σ', b.x + 56, b.y + b.h + 11);
+    ctx.fillStyle = '#5b7288';
+    ctx.fillText(dfos ? 'FBG 块均值' : '应变', b.x + 14, b.y + b.h + 11);
+    ctx.fillStyle = 'rgba(176,124,255,.9)'; ctx.fillRect(b.x + 66, b.y + b.h + 5, 7, 2);
+    ctx.fillStyle = '#5b7288';
+    ctx.fillText(dfos ? 'DFOS 峰' : '波动 σ', b.x + 76, b.y + b.h + 11);
   }
 
   /* ---- 证据层 ---- */
@@ -494,9 +542,164 @@
     });
   }
 
+  /* ---- 分布式应变空间分布 / 相对基线偏离热图 (L1 专有) ---- */
+  function dfColor(t) {                       // t∈[-1,1] → 青(负) / 暗(0) / 橙(正)
+    if (t > 1) t = 1; else if (t < -1) t = -1;
+    if (t >= 0) return [(16 + 239 * t) | 0, (28 + 62 * t) | 0, (38 + 22 * t) | 0];
+    var s = -t;
+    return [(16 + 21 * s) | 0, (28 + 184 * s) | 0, (38 + 202 * s) | 0];
+  }
+
+  /* 分位数(最多抽样 2000 点, 足够稳定) —— 用于鲁棒归一, 抵抗 DFOS 掉点 */
+  function dfQuantile(arr, q, n) {
+    var m = (n === undefined) ? arr.length : n;
+    var step = Math.max(1, Math.floor(m / 2000));
+    var tmp = [];
+    for (var i = 0; i < m; i += step) tmp.push(arr[i]);
+    if (!tmp.length) return 0;
+    tmp.sort(function (a, b) { return a - b; });
+    var k = (tmp.length - 1) * q;
+    var f = Math.floor(k), c2 = Math.min(tmp.length - 1, f + 1);
+    return tmp[f] + (tmp[c2] - tmp[f]) * (k - f);
+  }
+
+  /* 离屏预渲染整条寿命的偏离热图(x=空间, y=块), 每帧仅 drawImage 裁剪 → 流畅 */
+  function dfHeat(d, c) {
+    if (c.heat && c.heat._gid === d.gid) return c.heat;
+    var df = d.dfos, nblk = df.nblk, npos = df.npos;
+    var prof = c.dfProf, base = c.dfBase;
+    var cv = document.createElement('canvas');
+    cv.width = npos; cv.height = nblk;
+    var cx = cv.getContext('2d');
+    var img = cx.createImageData(npos, nblk);
+    var absdev = new Float32Array(prof.length);
+    var i, b, p, rgb;
+    for (i = 0; i < prof.length; i++) absdev[i] = Math.abs(prof[i] - base[i % npos]);
+    // 鲁棒色标: p98(抗 DFOS 掉点); 超出者饱和显示
+    var mx = Math.max(1e-6, dfQuantile(absdev, 0.98));
+    for (b = 0; b < nblk; b++) {
+      for (p = 0; p < npos; p++) {
+        rgb = dfColor((prof[b * npos + p] - base[p]) / mx);
+        i = (b * npos + p) * 4;
+        img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2];
+        img.data[i + 3] = 240;
+      }
+    }
+    cx.putImageData(img, 0, 0);
+    cv._gid = d.gid;
+    c.heatMx = mx;
+    c.heat = cv;
+    return cv;
+  }
+
+  function drawDFOS(d, c, f) {
+    if (!el.dfosRow) return;
+    if (!d.dfos || !c.dfProf) { el.dfosRow.style.display = 'none'; return; }
+    el.dfosRow.style.display = '';
+
+    var df = d.dfos, nblk = df.nblk, npos = df.npos, pos = df.pos;
+    var prof = c.dfProf, base = c.dfBase;
+    var bIdx = Math.max(0, Math.min(nblk - 1, df.blkOf[f]));
+    var off = bIdx * npos;
+    var heat = dfHeat(d, c);
+
+    /* ---------- 左: 相对基线偏离热图 (x=位置, y=循环数) ---------- */
+    var o1 = prep(el.cvDFHeat), x1 = o1.ctx;
+    var b1 = box(o1.w, o1.h, 44, 8, 8, 26);
+    bg(x1, b1);
+    x1.save();
+    x1.imageSmoothingEnabled = false;
+    x1.drawImage(heat, 0, 0, npos, bIdx + 1, b1.x, b1.y, b1.w, b1.h * (bIdx + 1) / nblk);
+    x1.restore();
+    // 边框 + 水平网格
+    x1.save();
+    x1.strokeStyle = 'rgba(37,212,240,.2)';
+    x1.strokeRect(b1.x + .5, b1.y + .5, b1.w - 1, b1.h - 1);
+    x1.strokeStyle = 'rgba(37,212,240,.08)';
+    x1.beginPath();
+    for (var g = 1; g < 4; g++) {
+      x1.moveTo(b1.x, Math.round(b1.y + b1.h * g / 4) + .5);
+      x1.lineTo(b1.x + b1.w, Math.round(b1.y + b1.h * g / 4) + .5);
+    }
+    x1.stroke();
+    x1.restore();
+    // 轴: y = 循环数 / x = 位置
+    x1.fillStyle = '#5b7288';
+    x1.font = '9px "Cascadia Mono",Consolas,monospace';
+    x1.textAlign = 'right'; x1.textBaseline = 'middle';
+    var yLbl = ['0', fmtT(df.cyc[(nblk - 1) >> 1]), fmtT(df.cyc[nblk - 1])];
+    for (var k = 0; k <= 2; k++) x1.fillText(yLbl[k], b1.x - 4, b1.y + b1.h * k / 2);
+    x1.textAlign = 'left'; x1.textBaseline = 'top';
+    for (var q = 0; q <= 2; q++) {
+      var pp = Math.min(npos - 1, Math.round((npos - 1) * q / 2));
+      x1.fillText(Math.round(pos[pp]) + (q === 2 ? ' mm' : ''), b1.x + b1.w * q / 2 + 2, b1.y + b1.h + 4);
+    }
+    x1.fillText('偏离基线  青=负 / 橙=正', b1.x + 2, b1.y + b1.h + 15);
+
+    /* ---------- 右: 当前块空间分布 vs 基线 ---------- */
+    var o2 = prep(el.cvDFProf), x2 = o2.ctx;
+    var b2 = box(o2.w, o2.h, 46, 8, 8, 16);
+    bg(x2, b2);
+    var lo, hi;
+    var l1v = Math.min(dfQuantile(base, 0.01), dfQuantile(prof, 0.01));
+    var h1v = Math.max(dfQuantile(base, 0.99), dfQuantile(prof, 0.99));
+    lo = l1v; hi = h1v;
+    if (!isFinite(lo) || !isFinite(hi) || hi <= lo) { lo = -1; hi = 1; }
+    var pd = (hi - lo) * .08 || 1;
+    lo -= pd; hi += pd;
+    grid(x2, b2, 4, 2, function (t) { return (lo + (hi - lo) * t).toFixed(0); });
+    // 当前块 − 基线 的偏离填充
+    x2.save();
+    x2.beginPath();
+    x2.moveTo(b2.x, yOf(prof[off], lo, hi, b2));
+    for (var p1 = 1; p1 < npos; p1++) {
+      x2.lineTo(b2.x + b2.w * p1 / (npos - 1), yOf(prof[off + p1], lo, hi, b2));
+    }
+    for (var p2 = npos - 1; p2 >= 0; p2--) {
+      x2.lineTo(b2.x + b2.w * p2 / (npos - 1), yOf(base[p2], lo, hi, b2));
+    }
+    x2.closePath();
+    x2.fillStyle = 'rgba(255,138,31,.16)';
+    x2.fill();
+    x2.restore();
+    // 基线(块 0, 健康)
+    x2.save();
+    x2.strokeStyle = 'rgba(150,170,190,.85)';
+    x2.lineWidth = 1;
+    x2.setLineDash([4, 3]);
+    x2.beginPath();
+    for (var p3 = 0; p3 < npos; p3++) {
+      var xa = b2.x + b2.w * p3 / (npos - 1), ya = yOf(base[p3], lo, hi, b2);
+      if (p3) x2.lineTo(xa, ya); else x2.moveTo(xa, ya);
+    }
+    x2.stroke();
+    x2.setLineDash([]);
+    x2.restore();
+    // 当前块分布
+    plotLine(x2, b2, prof.slice(off, off + npos), 0, npos, lo, hi, '#ffd08a',
+      { width: 1.6, glow: 6 });
+    // 图例
+    x2.font = '9px "Cascadia Mono",Consolas,monospace';
+    x2.textAlign = 'left'; x2.textBaseline = 'bottom';
+    x2.fillStyle = 'rgba(150,170,190,.95)'; x2.fillRect(b2.x + 2, b2.y + b2.h + 5, 7, 2);
+    x2.fillStyle = '#5b7288'; x2.fillText('基线(块0)', b2.x + 12, b2.y + b2.h + 11);
+    x2.fillStyle = '#ffd08a'; x2.fillRect(b2.x + 68, b2.y + b2.h + 5, 7, 2);
+    x2.fillStyle = '#5b7288'; x2.fillText('当前块', b2.x + 78, b2.y + b2.h + 11);
+
+    /* ---------- 读数 ---------- */
+    var mxdev = 0, dv2;
+    for (var p4 = 0; p4 < npos; p4++) {
+      dv2 = Math.abs(prof[off + p4] - base[p4]);
+      if (dv2 > mxdev) mxdev = dv2;
+    }
+    el.vDF.textContent = '块 ' + (bIdx + 1) + '/' + nblk + ' · ' + fmtT(df.cyc[bIdx]) +
+      ' · 峰值偏离 ' + mxdev.toFixed(0) + ' με' +
+      ' (色标 ±' + Math.round(c.heatMx || 0) +
+      (df.spikeN ? ' · 去尖峰 ' + df.spikeN + ' 点' : '') + ')';
+  }
+
   /* ---- 仪表 ---- */
-  function drawGauge(d, c, f) {
-    var D = c.D[f], lv = d.lv[f], col = LV_COLORS[lv];
+  function drawGauge(d, c, f) {    var D = c.D[f], lv = d.lv[f], col = LV_COLORS[lv];
     var R = 76, CIRC = 2 * Math.PI * R;
     el.gaugeArc.setAttribute('stroke-dasharray', (CIRC * Math.max(0.001, D)).toFixed(1) + ' ' + CIRC.toFixed(1));
     el.gaugeArc.style.stroke = col;
@@ -551,6 +754,41 @@
     el.valRK.textContent = rk.toFixed(3);
   }
 
+  /* ---- 通道健康表: 由数据包 chans 驱动(L1); 主样本还原静态行 ---- */
+  var CHAN_HTML0 = null;                 // 主样本静态通道表(首次构建时缓存)
+  function buildChanTable(d) {
+    if (!el.chanBody) { S.chanCells = null; return; }
+    if (CHAN_HTML0 === null) CHAN_HTML0 = el.chanBody.innerHTML;
+    if (!d.chans) {                      // 主样本: 还原静态行并重新取引用
+      el.chanBody.innerHTML = CHAN_HTML0;
+      ['hAEn', 'hFOn', 'hSTn', 'hDIn', 'hFOc', 'hFOs'].forEach(function (k) { el[k] = $(k); });
+      S.chanCells = null;
+      return;
+    }
+    el.chanBody.innerHTML = '';
+    S.chanCells = {};
+    d.chans.forEach(function (ch) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + ch.name + '</td><td>' + ch.mode + '</td><td>' +
+        (ch.n == null ? '—' : ch.n) + '</td><td class="n">0</td>' +
+        '<td><span class="st ok">在线</span></td>';
+      el.chanBody.appendChild(tr);
+      S.chanCells[ch.key] = { n: tr.children[3], s: tr.children[4].firstChild };
+    });
+  }
+
+  function setChan(key, txt) {
+    var c = S.chanCells && S.chanCells[key];
+    if (c) c.n.textContent = txt;
+  }
+
+  function setChanState(key, on) {
+    var c = S.chanCells && S.chanCells[key];
+    if (!c) return;
+    c.s.textContent = on ? '在线' : '未接入';
+    c.s.className = 'st ' + (on ? 'ok' : 'off');
+  }
+
   /* ---- 状态栏/健康表 ---- */
   function drawStatus(d, c, f) {
     var lv = d.lv[f];
@@ -560,29 +798,42 @@
       (f / (d.nfr - 1) * 100).toFixed(2) + '%,#132029 100%)';
     el.tlPct.textContent = (f / (d.nfr - 1) * 100).toFixed(1) + '%';
     el.tNow.textContent = fmtT(d.t[f]);
-    // 统一口径: 已回放的【原始】采样点数(10Hz) = 帧数 × 降采样步长
+    // 统一口径: 已回放的【原始】采样点数 = 帧数 × 降采样步长
     var rawPts = Math.min(d.n, (f + 1) * d.step);
     var nCh = d.foCols.length;
     var aeN = c.aeSum[f];
     el.roIdx.textContent = fmtNum(rawPts);
     el.roAe.textContent = fmtNum(aeN);
-    el.roRate.textContent = (S.playing ? (S.speed / FRAME_DT) : 0).toFixed(0) + ' /s';
-    el.hAEn.textContent = fmtNum(aeN) + ' 事件';
-    el.hFOn.textContent = nCh ? fmtNum(rawPts) + ' 点 × ' + nCh + ' 通道' : '—';
-    el.hSTn.textContent = fmtNum(rawPts) + ' 点';
-    el.hDIn.textContent = fmtNum(Math.floor(rawPts / 500)) + ' 块';
-    el.hFOc.textContent = nCh || '0';
-    if (d.foCols.length) {
-      el.hFOs.textContent = '在线'; el.hFOs.className = 'st ok';
+    el.roRate.textContent = (S.playing ? (S.speed / frameDt()) : 0).toFixed(0) +
+      (isCycle() ? ' 帧/s' : ' /s');
+    if (S.chanCells) {
+      setChan('ae', fmtNum(aeN) + ' 事件');
+      setChan('fo', nCh ? fmtNum(rawPts) + ' 点 × ' + nCh + ' 通道' : '—');
+      setChan('dfos', fmtNum(Math.max(1, Math.floor(rawPts / 5000))) + ' 块空间分布');
+      setChan('engine', fmtNum(Math.floor(rawPts / 500)) + ' 块结算');
+      setChanState('fo', !!nCh);
     } else {
-      el.hFOs.textContent = '未接入'; el.hFOs.className = 'st off';
+      el.hAEn.textContent = fmtNum(aeN) + ' 事件';
+      el.hFOn.textContent = nCh ? fmtNum(rawPts) + ' 点 × ' + nCh + ' 通道' : '—';
+      el.hSTn.textContent = fmtNum(rawPts) + ' 点';
+      el.hDIn.textContent = fmtNum(Math.floor(rawPts / 500)) + ' 块';
+      el.hFOc.textContent = nCh || '0';
+      if (nCh) { el.hFOs.textContent = '在线'; el.hFOs.className = 'st ok'; }
+      else { el.hFOs.textContent = '未接入'; el.hFOs.className = 'st off'; }
     }
 
-    el.vAE.textContent = (d.aen[f] * 2) + ' 次/s';
+    el.vAE.textContent = (d.aen[f] * rateK()) + (isCycle() ? ' 次/帧' : ' 次/s');
     var fo = c.fo, ks = Object.keys(fo);
-    el.vFO.textContent = ks.length ? ks.map(function (k) { return k + ' ' + fo[k][f].toFixed(2); }).join('  ')
-      : '离线';
-    el.vST.textContent = c.st[f].toFixed(2) + ' με';
+    if (ks.length > 3) {
+      var msum = 0;
+      ks.forEach(function (k) { msum += fo[k][f]; });
+      el.vFO.textContent = ks.length + ' 通道 · 均值 ' + (msum / ks.length).toFixed(1);
+    } else {
+      el.vFO.textContent = ks.length
+        ? ks.map(function (k) { return k + ' ' + fo[k][f].toFixed(2); }).join('  ') : '离线';
+    }
+    el.vST.textContent = c.st[f].toFixed(1) + ' με' +
+      (c.dloc ? ' | DFOS峰 ' + c.dloc[f].toFixed(0) : '');
     el.vEV.textContent = 'e_ae ' + c.eae[f].toFixed(2) + ' | risk ' + c.risk[f].toFixed(2);
 
     var st = el.sysState;
@@ -592,6 +843,11 @@
   }
 
   function fmtT(t) {
+    if (isCycle()) {                        // L1: 时间基 = 循环数
+      t = Math.max(0, t);
+      if (t >= 10000) return (t / 1000).toFixed(1) + 'k cyc';
+      return Math.round(t) + ' cyc';
+    }
     t = Math.max(0, Math.round(t));
     var h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
     return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
@@ -643,7 +899,7 @@
     var dt = S.last ? (ts - S.last) / 1000 : 0;
     S.last = ts;
     if (S.playing && S.data) {
-      S.frame += Math.min(.25, dt) * S.speed / FRAME_DT;
+      S.frame += Math.min(.25, dt) * S.speed / frameDt();
       var end = S.data.nfr - 1;
       if (S.frame >= end) { S.frame = end; pause(true); }
       syncWarn();
@@ -715,7 +971,7 @@
         S.data = window.SHM_DATA[gid]; res(S.data); return;
       }
       var s = document.createElement('script');
-      s.src = 'data/' + gid + '.js';
+      s.src = ((S.ds && S.ds.path) || 'data/') + gid + '.js';
       s.onload = function () {
         S.data = window.SHM_DATA[gid]; res(S.data);
       };
@@ -731,18 +987,32 @@
     el.bootText.textContent = '正在加载试件 ' + gid + ' 数据包 …';
     loadGroup(gid).then(function (d) {
       S.gid = gid; S.warnIdx = 0;
+      S.unit = d.unit || 's';
+      S.frameDt = d.frameDt || DEF_FRAME_DT;
       S.cache = {};
       getSeries();
       el.gidSel.value = gid;
       el.btnRun.disabled = false; el.btnReset.disabled = false; el.seek.disabled = false;
       el.tTotal.textContent = '/ ' + fmtT(d.dur);
+      if (el.equipRig && d.rig) el.equipRig.textContent = d.rig;
+      if (el.equipMode && d.mode) el.equipMode.textContent = d.mode;
+      buildChanTable(d);
+      var TT = isCycle()
+        ? { ae: '声发射 · 事件率 / 峰值', fo: '光纤光栅 · 多通道', st: '分布式应变 · 块均值 / 局部峰' }
+        : { ae: '声发射 · 事件率 / 峰值', fo: '光纤光栅 · 多通道', st: '应变 · 波形 / 波动' };
+      if (el.tAE) el.tAE.textContent = TT.ae;
+      if (el.tFO) el.tFO.textContent = TT.fo;
+      if (el.tST) el.tST.textContent = TT.st;
       el.boot.classList.add('hide');
       S.dirty = true;
       if (!keepLog) {
         el.logList.innerHTML = '<div class="log-empty">— 暂无记录 —</div>';
         S.logCount = 0; el.logCount.textContent = '0 条';
-        pushLog(0, '系统', '试件 ' + gid + ' 传感通道已接入 · ' +
-          '光纤 ' + (d.foCols.length || 0) + ' 通道 / 声发射 25 通道 / 应变 1 通道 · 等待在线数据' );
+        var desc = d.chans
+          ? d.chans.filter(function (x) { return x.key !== 'engine'; })
+            .map(function (x) { return x.name.split(' ')[0] + ' ' + x.n + ' ' + (x.unit || '通道'); }).join(' / ')
+          : ('光纤 ' + (d.foCols.length || 0) + ' 通道 / 声发射 25 通道 / 应变 1 通道');
+        pushLog(0, '系统', '试件 ' + gid + ' 传感通道已接入 · ' + desc + ' · 等待在线数据');
       }
       render();
     }).catch(function (e) {
@@ -753,6 +1023,7 @@
   }
 
   function bind() {
+    if (el.dsSel) el.dsSel.addEventListener('change', function () { selectDataset(this.value); });
     el.gidSel.addEventListener('change', function () { selectGroup(this.value); });
     el.btnRun.addEventListener('click', function () { S.playing ? pause(false) : play(); });
     el.btnReset.addEventListener('click', function () { reset(); });
@@ -800,17 +1071,54 @@
     });
   }
 
-  function init() {
-    bind();
-    var idx = window.SHM_INDEX || [];
-    if (!idx.length) { el.bootText.textContent = '未找到数据清单 index.js'; return; }
-    idx.forEach(function (g) {
+  function collectDatasets() {
+    var dss = [], k, seen = {};
+    var D = window.SHM_DATASETS;
+    if (D) {
+      for (k in D) {
+        if (D[k] && D[k].groups && D[k].groups.length) { dss.push(D[k]); seen[D[k].id] = 1; }
+      }
+    }
+    // 主样本清单向后兼容: export_dashboard.py 写的是 window.SHM_INDEX
+    if (window.SHM_INDEX && window.SHM_INDEX.length && !seen.main) {
+      dss.unshift({ id: 'main', name: '疲劳机主样本 016-022', unit: 's', path: 'data/',
+        groups: window.SHM_INDEX });
+    }
+    return dss;
+  }
+
+  function fillGroupSel(ds) {
+    el.gidSel.innerHTML = '';
+    ds.groups.forEach(function (g) {
       var o = document.createElement('option');
       o.value = g.gid;
       o.textContent = '试件 ' + g.gid;
       el.gidSel.appendChild(o);
     });
-    selectGroup(idx[0].gid);
+  }
+
+  function selectDataset(dsId) {
+    var ds = (S.datasets || []).filter(function (x) { return x.id === dsId; })[0];
+    if (!ds) return;
+    S.ds = ds;
+    fillGroupSel(ds);
+    if (el.dsSel) el.dsSel.value = dsId;
+    selectGroup(ds.groups[0].gid);
+  }
+
+  function init() {
+    bind();
+    S.datasets = collectDatasets();
+    if (!S.datasets.length) { el.bootText.textContent = '未找到数据清单 index.js'; return; }
+    if (el.dsSel) {
+      S.datasets.forEach(function (ds) {
+        var o = document.createElement('option');
+        o.value = ds.id;
+        o.textContent = ds.name;
+        el.dsSel.appendChild(o);
+      });
+    }
+    selectDataset(S.datasets[0].id);
     requestAnimationFrame(loop);
   }
 

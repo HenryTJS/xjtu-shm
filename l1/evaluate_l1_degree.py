@@ -137,10 +137,14 @@ def run_group(gid, params=None, baseline=False, strain_ev=False, fusion='max'):
     i0 = int(round(c0 / CYCS_PER_PT))
     di = OnlineDamageIndex(params)
     D = np.zeros(nb)
+    RISK = np.zeros(nb)          # 逐点 risk  (供看板导出)
+    EAE = np.zeros(nb)           # 逐点 e_ae  (供看板导出)
+    EST = np.zeros(nb)           # 逐点 e_strain(供看板导出)
     if not strain_ev:
         for i in range(i0, nb):
             pk = float(peak[i]) if peak[i] > 0 else None
             D[i] = di.update(float(strain[i]), pk)
+            RISK[i] = di.risk; EAE[i] = di._last_e_ae; EST[i] = di._last_e_strain
     else:
         p = dict(params or {})
         rise = float(p.get('rise', 0.05)); fall = float(p.get('fall', 0.008))
@@ -149,6 +153,7 @@ def run_group(gid, params=None, baseline=False, strain_ev=False, fusion='max'):
         l_blk = int(p.get('latch_conf_blk', 3)); l_fast = float(p.get('latch_rise_fast', 0.5))
         e_st = strain_drift_evidence(strain, i0)
         d = 0.0; b_prev = 0; d_hist = []; latched = False
+        risk = 0.0; ae_ev = 0.0; st_ev = 0.0
         for i in range(i0, nb):
             pk = float(peak[i]) if peak[i] > 0 else None
             di.update(float(strain[i]), pk)
@@ -174,7 +179,9 @@ def run_group(gid, params=None, baseline=False, strain_ev=False, fusion='max'):
                     if latched and risk > d:
                         d = min(1.0, d + l_fast * (risk - d))
             D[i] = d
-    return dict(gid=gid, cyc=cyc_grid, D=D, strain=strain, peak=peak, c0=c0)
+            RISK[i] = risk; EAE[i] = ae_ev; EST[i] = st_ev
+    return dict(gid=gid, cyc=cyc_grid, D=D, strain=strain, peak=peak, c0=c0,
+                risk=RISK, eae=EAE, est=EST)
 
 
 def metrics(r):

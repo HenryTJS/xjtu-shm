@@ -11,8 +11,8 @@
   - 损伤模型 : shm.damage_index.OnlineDamageIndex (默认参数 = 正式方法)
 
 输出:
-  dashboard/data/{gid}.js   每组一个数据包 (window.SHM_DATA[gid] = {...})
-  dashboard/data/index.js   组清单与摘要 (window.SHM_INDEX = [...])
+  <项目根>/dashboard/data/{gid}.js   每组一个数据包 (window.SHM_DATA[gid] = {...})
+  <项目根>/dashboard/data/index.js   组清单与摘要 (window.SHM_INDEX = [...])
 
 数值编码(压缩体积, 前端解码):
   D / risk / e_ae / e_strain : ×1000 整数
@@ -30,8 +30,9 @@ import sys
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(ROOT))   # 项目根(含 shm)
+ROOT = os.path.dirname(os.path.abspath(__file__))   # <项目根>\main
+PROJ = os.path.dirname(ROOT)                        # 项目根
+sys.path.insert(0, PROJ)                     # 项目根(含 shm)
 sys.path.insert(0, ROOT)                     # main/(eval_common)
 os.chdir(ROOT)
 
@@ -40,7 +41,7 @@ from shm.config import DEFAULT_GROUPS                # noqa: E402
 from shm.damage_index import OnlineDamageIndex       # noqa: E402
 from shm.streaming import StreamSimulator            # noqa: E402
 
-OUTDIR = os.path.join(ROOT, 'dashboard', 'data')
+OUTDIR = os.path.join(PROJ, 'dashboard', 'data')   # 看板在项目根(与 main/l1 同级)
 STEP = 5                 # 降采样步长(点): 10Hz → 2Hz 帧
 AE_EMPTY = -99999        # aeLog 空值标记
 LEVEL_NAMES = ['正常', '注意', '预警', '临危']

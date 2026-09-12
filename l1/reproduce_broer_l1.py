@@ -24,31 +24,17 @@ plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 ROOT = os.path.dirname(os.path.abspath(__file__))   # <项目根>\l1 (本脚本目录)
+sys.path.insert(0, ROOT)                            # 使 l1_meta 可导入
 RES = os.path.join(ROOT, 'results')
 FIG = os.path.join(ROOT, 'figures')
 os.makedirs(RES, exist_ok=True)
 os.makedirs(FIG, exist_ok=True)
 
-# 每组: n_f + DFOS 左右脚空间段 + 论文损伤检测参考 cycle
-META = {
-    'L1-03': dict(n_f=152458,
-                  foot_L=(4530, 4660), foot_R=(1510, 1690),
-                  refs=[('冲击后扩展', 10000), ('刚度退化', 69000),
-                        ('AE脱粘', 130000), ('应变脱粘', 143000)]),
-    'L1-04': dict(n_f=280098,
-                  foot_L=(4070, 4300), foot_R=(1170, 1360),
-                  refs=[('前段低活动', 5000), ('刚度退化(误报)', 30000),
-                        ('应变脱粘', 239500), ('AE脱粘', 260000)]),
-    'L1-05': dict(n_f=144969,
-                  foot_L=(4455, 4650), foot_R=(1060, 1265),
-                  refs=[('短暂disbond', 66500), ('刚度退化', 68000),
-                        ('AE脱粘', 100000), ('应变脱粘', 110000)]),
-    # L1-09: 论文未收录, 但与 03/04/05 同工况(10J 冲击 + -6.5/-65kN 压-压疲劳)。
-    # 冲击位于加强筋中央; ODiSi-B: 左脚 2580-2780, 右脚 570-785。无论文参考点。
-    'L1-09': dict(n_f=133281,
-                  foot_L=(2580, 2780), foot_R=(570, 785),
-                  refs=[]),
-}
+# 元信息自适应: n_f 与 DFOS 左右脚空间段由各组 L1-xx.pdf 自动解析(适配不同光纤布设);
+# refs(论文损伤检测点)属标签, 仅 03/04/05 有, 静态维护在 l1_meta。
+from l1_meta import load_meta                       # noqa: E402
+GROUPS = ['L1-03', 'L1-04', 'L1-05', 'L1-09']
+META = {g: load_meta(g) for g in GROUPS}
 CYCLES_BIN = 500   # 论文 y/HI 的 cycle 步长
 # L1-05 起点修正开关: 对 HI_OF 负值截断(见 level4 注释)。设为 False 即按论文原式(min/max)
 CLIP_HI_OF_NEG = True

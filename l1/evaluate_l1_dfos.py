@@ -20,14 +20,17 @@ FIG = os.path.join(ROOT, 'figures')
 os.makedirs(RES, exist_ok=True)
 os.makedirs(FIG, exist_ok=True)
 
-META = {
-    'L1-03': dict(n_f=152458, refs=[('冲击后扩展', 10000), ('刚度退化', 69000),
-                                    ('AE脱粘', 130000), ('应变脱粘', 143000)]),
-    'L1-04': dict(n_f=280098, refs=[('前段低活动', 5000), ('刚度退化(误报)', 30000),
-                                    ('应变脱粘', 239500), ('AE脱粘', 260000)]),
-    'L1-05': dict(n_f=144969, refs=[('短暂disbond', 66500), ('刚度退化', 68000),
-                                    ('AE脱粘', 100000), ('应变脱粘', 110000)]),
-}
+sys.path.insert(0, ROOT)                            # 使 l1_meta 可导入
+from l1_meta import load_meta                       # noqa: E402
+GROUPS = ['L1-03', 'L1-04', 'L1-05', 'L1-09']
+META = {g: load_meta(g) for g in GROUPS}
+
+# --- DFOS 空间去尖峰(光纤掉点)标定, 2026-09-12 ---
+# 全分辨率网格间距 0.650 mm; 本底残差 p50≈2.5 / p99≈28 µε, 与掉点完全分离。
+# 阈值 = max(绝对非物理跳变, k×局部稳健尺度)。实测 |resid|>3000 µε 命中:
+#   L1-03 0 点 / L1-04 7 点 / L1-05 5 点 / L1-09 263 点(≈ 降采样后 17 个位置)。
+DESPIKE_ABS = 3000.0          # µε — 单点跨越 0.65 mm 的跳变超过此值即非物理
+DESPIKE_K = 8.0               # 相对局部稳健尺度(1.4826×MAD)的倍数; 与 ABS 取大
 
 
 def load_dfos(gid):
@@ -92,6 +95,51 @@ def drift_feature(prof, base_prof, pos):
     return rmse, local
 
 
+def _medfilt_row(row, win=9):
+    """一维中值滤波(edge 填充), 不依赖 scipy。"""
+    from numpy.lib.stride_tricks import sliding_window_view as sw
+    w = int(win) | 1                       # 强制奇数窗
+    if row.size < w:
+        return row.copy()
+    ext = np.pad(row, w // 2, mode='edge')
+    return np.median(sw(ext, w), axis=1)
+
+
+def despike_row(row, win=9, abs_th=DESPIKE_ABS, k=DESPIKE_K):
+    """单条空间分布的**去尖峰**(光纤掉点检测与修复)。
+
+    依据: 掉点是**孤立空间尖峰**(L1-09 单点跳 1.6 万 µε, 邻点仅几个 µε),
+    而真实损伤是**平滑空间梯度** → 用"与局部中位偏差 > max(abs_th, k×1.4826·MAD)"判定,
+    命中点用局部中位替换。返回 (清洗后行, 修复点数)。
+    """
+    r = np.asarray(row, float)
+    finite = np.isfinite(r)
+    if finite.sum() < 10:
+        return r.copy(), 0
+    fill = r.copy()
+    if not finite.all():                   # NaN 先沿位置插值(仅用于算中位)
+        idx = np.arange(r.size)
+        fill = np.interp(idx, idx[finite], r[finite])
+    med = _medfilt_row(fill, win)
+    resid = fill - med
+    sc = float(np.median(np.abs(resid))) * 1.4826
+    m = np.abs(resid) > max(abs_th, k * sc)
+    out = r.copy()
+    if m.any():
+        out[m] = med[m]
+    return out, int(m.sum())
+
+
+def despike_profiles(prof, **kw):
+    """批量去尖峰(逐条块分布)。返回 (清洗后二维数组, 总修复点数)。"""
+    out = np.asarray(prof, float).copy()
+    n = 0
+    for b in range(out.shape[0]):
+        out[b], c = despike_row(out[b], **kw)
+        n += c
+    return out, n
+
+
 def analyze(gid):
     nf = META[gid]['n_f']
     td, pos, M = load_dfos(gid)
@@ -99,17 +147,25 @@ def analyze(gid):
     nblk = len(blk)
     blk_cyc = (np.arange(nblk) + 0.5) / nblk * nf
     row_blk = distribute_rows_to_blocks(td, blk)
-    # 健康基准块: 前 4 块中位分布(排除块0冲击? 先试前4)
-    base_rows = np.isin(row_blk, [0, 1, 2, 3])
-    if base_rows.sum() < 5:
-        base_rows = row_blk == 0
+    # 方案A(2026-09-12): 健康基准 = **首个测量块(块0)** 的分布(论文"相对首测"口径)
+    base_rows = row_blk == 0
+    if base_rows.sum() == 0:
+        base_rows = np.isin(row_blk, [0, 1, 2, 3])     # 退路: 前 4 块
     base_prof = np.nanmedian(M[base_rows], axis=0)
-    # 每块特征
+    base_nan0 = int(np.isnan(base_prof).sum())          # 清洗前的原始缺失数(数据质量指标)
+    # 基准自身也去尖峰(否则基线的掉点会污染全部块的偏离)
+    base_prof, n_fix_base = despike_row(base_prof)
+    # 基准就是块0分布时, 其修复已含在下面的逐块统计里 → 避免重复计数
+    n_fix_base = 0 if bool((row_blk == 0).any()) else n_fix_base
+    # 每块特征(先去尖峰再算偏离)
     rmse, local = [], []
+    n_fix = 0
     for k in range(nblk):
         prof = block_profile(M, row_blk == k)
         if prof is None:
             rmse.append(np.nan); local.append(np.nan); continue
+        prof, nfx = despike_row(prof)
+        n_fix += nfx
         r, l = drift_feature(prof, base_prof, pos)
         rmse.append(r); local.append(l)
     rmse = np.array(rmse); local = np.array(local)
@@ -128,13 +184,15 @@ def analyze(gid):
         idx = np.where(hi >= th)[0]
         return float(blk_cyc[idx[0]]) if len(idx) else np.nan
 
-    row = dict(gid=gid, n_f=nf, n_blk=nblk, base_prof_nan=int(np.isnan(base_prof).sum()),
+    row = dict(gid=gid, n_f=nf, n_blk=nblk, base_prof_nan=base_nan0,
+               spike_fix=round(float(n_fix + n_fix_base)),
                rmse_end=round(float(rmse[-1]), 1), local_scale=round(scale, 1),
                HI_end=round(float(hi[-1]), 3), tail_mono=round(mono, 1),
                warn25=round(first_th(.25), 1) if not np.isnan(first_th(.25)) else np.nan,
                warn50=round(first_th(.5), 1) if not np.isnan(first_th(.5)) else np.nan,
                warn70=round(first_th(.7), 1) if not np.isnan(first_th(.7)) else np.nan)
-    print(f'\n[{gid}] 块={nblk}  local_scale={scale:.0f}  HI_end={hi[-1]:.2f}  尾段单调={mono:.0f}%')
+    print(f'\n[{gid}] 块={nblk}  local_scale={scale:.0f}  HI_end={hi[-1]:.2f}  尾段单调={mono:.0f}%  '
+          f'去尖峰={int(n_fix + n_fix_base)}点')
     print(f'  HI 达0.25@{row["warn25"]}  0.50@{row["warn50"]}  0.70@{row["warn70"]} (n_f={nf})')
     print('  论文参考: ' + ', '.join(f'{l}@{c}' for l, c in META[gid]['refs']))
     np.savez_compressed(os.path.join(RES, f'_l1_dfos_hi_{gid}.npz'),

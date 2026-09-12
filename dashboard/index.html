@@ -21,16 +21,20 @@
 
     <div class="topbar-center">
       <div class="equip">
+        <label>数据集</label>
+        <select id="dsSel"></select>
+      </div>
+      <div class="equip">
         <label>被测试件</label>
         <select id="gidSel"></select>
       </div>
       <div class="equip">
         <label>试验台架</label>
-        <div class="equip-val">HYD-04 电液伺服疲劳机</div>
+        <div class="equip-val" id="equipRig">HYD-04 电液伺服疲劳机</div>
       </div>
       <div class="equip">
         <label>采集模式</label>
-        <div class="equip-val">多源同步 · 10&nbsp;Hz</div>
+        <div class="equip-val" id="equipMode">多源同步 · 10&nbsp;Hz</div>
       </div>
     </div>
 
@@ -128,6 +132,8 @@
           <span class="lg lg-r"><i></i>证据 risk</span>
           <span class="lg lg-b2" id="lgB2" style="display:none"><i></i>b2 扩展参考</span>
           <span class="lg lg-b3" id="lgB3" style="display:none"><i></i>b3 断裂锚</span>
+          <span class="lg lg-c0" id="lgC0" style="display:none"><i></i>c0 基线终点</span>
+          <span class="lg lg-rf" id="lgRef" style="display:none"><i></i>论文检测点</span>
         </div>
       </div>
       <canvas id="cvTrend"></canvas>
@@ -181,21 +187,21 @@
   <section class="subrow">
     <div class="panel chan">
       <div class="phead">
-        <div class="ptitle"><i class="c-ae"></i>AE<b>声发射 · 事件率 / 峰值</b></div>
+        <div class="ptitle"><i class="c-ae"></i>AE<b id="tAE">声发射 · 事件率 / 峰值</b></div>
         <div class="chan-val" id="vAE">—</div>
       </div>
       <canvas id="cvAE"></canvas>
     </div>
     <div class="panel chan">
       <div class="phead">
-        <div class="ptitle"><i class="c-fo"></i>FBG<b>光纤光栅 · 多通道</b></div>
+        <div class="ptitle"><i class="c-fo"></i>FBG<b id="tFO">光纤光栅 · 多通道</b></div>
         <div class="chan-val" id="vFO">—</div>
       </div>
       <canvas id="cvFO"></canvas>
     </div>
     <div class="panel chan">
       <div class="phead">
-        <div class="ptitle"><i class="c-st"></i>STRAIN<b>应变 · 波形 / 波动</b></div>
+        <div class="ptitle"><i class="c-st"></i>STRAIN<b id="tST">应变 · 波形 / 波动</b></div>
         <div class="chan-val" id="vST">—</div>
       </div>
       <canvas id="cvST"></canvas>
@@ -206,6 +212,20 @@
         <div class="chan-val" id="vEV">—</div>
       </div>
       <canvas id="cvEV"></canvas>
+    </div>
+  </section>
+
+  <!-- ======================= 分布式应变空间分布 (L1 专有) ======================= -->
+  <section class="dfosrow" id="dfosRow">
+    <div class="panel">
+      <div class="phead">
+        <div class="ptitle"><i class="c-df"></i>DISTRIBUTED STRAIN<b id="tDF">分布式应变 · 空间分布 / 相对基线偏离</b></div>
+        <div class="chan-val" id="vDF">—</div>
+      </div>
+      <div class="dfos-wrap">
+        <canvas id="cvDFHeat"></canvas>
+        <canvas id="cvDFProf"></canvas>
+      </div>
     </div>
   </section>
 
@@ -229,7 +249,7 @@
         <thead>
           <tr><th>通道</th><th>采样</th><th>通道数</th><th>累计数据量</th><th>状态</th></tr>
         </thead>
-        <tbody>
+        <tbody id="chanBody">
           <tr id="hAE"><td>声发射 AE</td><td>事件流</td><td>25</td><td class="n" id="hAEn">0</td>
               <td><span class="st ok">在线</span></td></tr>
           <tr id="hFO"><td>光纤光栅 FBG</td><td>10 Hz</td><td id="hFOc">—</td><td class="n" id="hFOn">0</td>
@@ -241,7 +261,7 @@
         </tbody>
       </table>
       <div class="health-foot">
-        <span>算法：多源证据融合 · 在线因果流式　计数口径：已回放的原始采样点（AE 为对齐至 10 Hz 网格后的事件数）</span>
+        <span>算法：多源证据融合 · 在线因果流式　计数口径：已回放的原始采样点</span>
         <span id="algoInfo">D ∈ [0,1] · 阈值 0.25 / 0.55 / 0.85</span>
       </div>
     </div>
@@ -256,6 +276,7 @@
 </div>
 
 <script src="data/index.js"></script>
+<script src="data/index_l1.js"></script>
 <script src="assets/dashboard.js"></script>
 </body>
 </html>

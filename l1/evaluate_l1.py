@@ -36,33 +36,33 @@ FIG = os.path.join(ROOT, 'figures')
 os.makedirs(RES, exist_ok=True)
 os.makedirs(FIG, exist_ok=True)
 
-META = {
-    'L1-03': dict(n_f=152458,
-                  refs=[('冲击后扩展', 10000), ('刚度退化', 69000),
-                        ('AE脱粘', 130000), ('应变脱粘', 143000)]),
-    'L1-04': dict(n_f=280098,
-                  refs=[('前段低活动', 5000), ('刚度退化(误报)', 30000),
-                        ('应变脱粘', 239500), ('AE脱粘', 260000)]),
-    'L1-05': dict(n_f=144969,
-                  refs=[('短暂disbond', 66500), ('刚度退化', 68000),
-                        ('AE脱粘', 100000), ('应变脱粘', 110000)]),
-}
-FBG_COLS = ['fbg1', 'b1', 'b2', 'b3', 'b4', 'b5']
+sys.path.insert(0, ROOT)                            # 使 l1_meta 可导入
+from l1_meta import load_meta                       # noqa: E402
+GROUPS = ['L1-03', 'L1-04', 'L1-05', 'L1-09']
+META = {g: load_meta(g) for g in GROUPS}
 GAP_S = 300.0        # FBG 测量块间隔阈值
 CYCS_PER_BLK = 5000
 
 
+def fbg_strain_cols(df):
+    """全部 FBG 应变通道(表头自适应): fbg* 与 b*; 排除 FBG_A*/FBG_B*(波长列)。"""
+    return [c for c in df.columns
+            if (c.startswith('fbg') and c[3:].isdigit())
+            or (c.startswith('b') and c[1:].isdigit())]
+
+
 def load_fbg(gid):
+    """读 FBG; 应变 = **全部 FBG 应变通道均值**(自适应从表头取)。
+    返回 (t, strain_series)。"""
     fp = os.path.join(ROOT, gid, f'{gid}光纤.csv')
     df = pd.read_csv(fp, encoding='utf-8-sig')
     t = df['timestamp'].to_numpy(float)
-    cols = [c for c in FBG_COLS if c in df.columns]
-    s = df[cols].mean(axis=1, skipna=True).to_numpy(float)
+    s = df[fbg_strain_cols(df)].mean(axis=1, skipna=True).to_numpy(float)
     return t, s
 
 
 def fbg_blocks(gid):
-    """返回每块: 中心时间 / 应变均值 / 块号→cycle。"""
+    """返回 (cyc, 块应变均值, mid_t)。步长 ~5000 cycle(FBG 停机测量块)。"""
     t, s = load_fbg(gid)
     nf = META[gid]['n_f']
     gap = np.where(np.diff(t) > GAP_S)[0]
@@ -105,14 +105,13 @@ def load_ae_per_block(gid, cyc, mid_t):
 
 def hi_from_strain(mean_s, base_frac=0.25, alpha=0.5, drop=0.15):
     """应变绝对偏离 → HI[0,1]。
-    base = 前 base_frac 块中位(健康基线); dev = |strain - base| (µε);
-    HI: 升快(追 dev 归一)降慢(记忆), 但方向未知 → 用偏离 EWMA 归一。
-    归一尺度: 用全窗 90 分位 dev (相对尺度), 得 0~1 单调近似。
+    方案A(2026-09-12): base = **首个应变测量**(论文 Level-4 "相对首测"口径);
+    dev = |strain - base| (µε); HI: 升快(追 dev 归一)降慢(记忆)。
+    归一尺度: 全窗 90 分位 dev (相对尺度), 得 0~1 单调近似。
     """
     mean_s = np.asarray(mean_s, float)
     n = len(mean_s)
-    nb = max(1, int(n * base_frac))
-    base = float(np.median(mean_s[:nb]))
+    base = float(mean_s[0])          # 方案A: 基准 = 首个应变测量
     dev = np.abs(mean_s - base)
     scale = float(np.percentile(dev, 90)) if np.percentile(dev, 90) > 1e-9 else 1.0
     hi = np.zeros(n)

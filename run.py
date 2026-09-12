@@ -39,6 +39,7 @@ TASKS = {
                     ['main/robustness.py', 'loso'],
                     ['main/robustness.py', 'ablation'],
                     ['main/robustness.py', 'stats']],
+        'dashboard': [['main/export_dashboard.py']],          # → dashboard/data/
     },
     'l1': {
         'prepare':  [['l1/step0.py']],                       # 原始 .pridb/.txt → CSV
@@ -47,6 +48,7 @@ TASKS = {
         'paper':    [['l1/reproduce_broer_l1.py', '--mode', 'all']],  # 论文 Level1 + Level4
         'dfos':     [['l1/evaluate_l1_dfos.py', '--mode', 'hi']],     # 分布式应变逐块
         'fiber-hi': [['l1/evaluate_l1.py', '--mode', 'hi']],          # 光纤(FBG)块级 HI
+        'dashboard': [['l1/export_dashboard_l1.py']],                  # → dashboard/data/
     },
 }
 
@@ -60,6 +62,7 @@ DESC = {
     'dfos':     ('分布式应变分析', '—', 'evaluate_l1_dfos.py: 逐块+热图'),
     'fiber-hi': ('光纤块级 HI', '—', 'evaluate_l1.py: FBG 块级 HI'),
     'robust':   ('稳健性/统计', 'robustness.py: sens/loso/ablation/stats', '— （未做）'),
+    'dashboard': ('看板数据导出', 'export_dashboard.py → dashboard/data/', 'export_dashboard_l1.py → dashboard/data/'),
 }
 
 

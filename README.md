@@ -1,11 +1,8 @@
 # 多源在线损伤度 D(t) 监测 —— 总纲与使用说明
 
-> 本文件是**唯一总纲文档**：涵盖两类数据集、统一方法与入口、结果、稳健性、复现说明。
-> （原先独立的 `L1_public_dataset_findings.md` 已归并入本文；子看板说明见 `dashboard/README.md`。）
-
 ## 0. 两类数据集：总览与自由切换
 
-本项目同一套“多源在线损伤度 D(t)”框架在**两类数据集**上运行，可用统一入口自由切换数据源。
+本项目同一套“多源在线损伤度 D(t)”框架在两类数据集上运行，可用统一入口自由切换数据源。
 
 | 维度      | **主样本（内部疲劳机）**                       | **公开集（ReMAP / TU-Delft）**                           |
 | --------- | ---------------------------------------------------- | -------------------------------------------------------------- |
@@ -15,7 +12,7 @@
 | 时间基准  | 10Hz 统一时间轴（对齐后）                            | FBG 的 5000-cycle 测量块为 cycle 锚；AE 事件级                 |
 | 失效锚    | b3 = 数据末端(≈99% 寿命)=断裂                       | n_f = 实测失效循环（论文 Table 1 /`L1-xx.pdf`）              |
 | 参考论文  | 本项目自研方法                                       | 复现 Broer et al. (2021) Level 1 / Level 4                     |
-| D(t) 适配 | 默认参数（v6 + latch）                               | **基线重定义 + 应变漂移证据**（见 §3.2）                |
+| D(t) 适配 | 默认参数 + latch                                     | **基线重定义 + 应变漂移证据**（见 §3.2）                |
 
 **统一入口 `run.py`**（数据源自由切换）：
 
@@ -25,13 +22,14 @@ python run.py --dataset main --task degree    # 主样本：D(t) 达阈
 python run.py --dataset l1   --task degree    # L1：D(t)（基线重定义+应变证据）
 python run.py --dataset l1   --task paper     # L1：论文 Level1/4 复现
 python run.py --dataset l1   --task all       # L1 全部任务
+python run.py --dataset main --task dashboard # 导出看板数据 → dashboard/data/
 python run.py --dataset main --task degree -- --workers 8   # '--' 后透传给底层脚本
 ```
 
 ## 1. 项目简介与正式范围
 
 - **目标**：由多源信号在线算出**连续损伤度** $D(t)\in[0,1]$，按 **0.25 / 0.55 / 0.85** 分级预警
-  （注意 / 预警 / 临危），供论文与专利使用。
+  （注意 / 预警 / 临危）。
 - **在线因果**：D 的计算为**逐点流式、零未来信息**，且**不使用标签**。
 - **主样本正式范围 = 6 组**：016、017、018、019、020、022。
 - **失效锚**：b3 = 数据末端(≈99% 寿命) = 断裂（客观锚）；b2(扩展) 仅作离线评估/选参参考；b1(萌生) 不用于评估。
@@ -39,11 +37,9 @@ python run.py --dataset main --task degree -- --workers 8   # '--' 后透传给�
 
 ## 2. 目录结构
 
-顶层只保留**公用部分**（README / 入口 / 库）；两类数据集各自**自包含**（脚本 + 原始数据 + 产物）。
-
 ```
 d:\lixiang\
-├── README.md                     # 本文件（唯一总纲）
+├── README.md                     # 本文件
 ├── run.py                        # ★ 统一入口：--dataset {main,l1} --task {...}
 ├── shm\                          # 公用库
 │   ├── config.py                 # 全局常量(BASE_DIR=main/、EXT_BLOCK_PTS=500 等)
@@ -51,31 +47,35 @@ d:\lixiang\
 │   ├── streaming.py              # ChunkedDataReader + StreamSimulator
 │   └── damage_index.py           # OnlineDamageIndex：连续损伤度 D(t) + 分级预警
 │
+├── dashboard\                    # ── 在线监测看板（纯前端, 两类数据集共用）──
+│   ├── index.html                #   入口(双击即用; 顶栏切换数据集/试件)
+│   ├── assets\                   #   dashboard.css / dashboard.js
+│   ├── README.md                 #   看板使用与二次开发说明
+│   └── data\                     #   数据包: 016..022.js+index.js / L1-xx.js+index_l1.js
+│
 ├── main\                         # ── 主样本 016-022（自包含）──
 │   ├── prepare_data.py           #   阶段① 数据准备: align / weaklabels
 │   ├── evaluate.py               #   阶段② 评估出图: degree / warning / curves / paper
 │   ├── robustness.py             #   阶段③ 稳健性: sens / loso / ablation / stats
 │   ├── eval_common.py            #   主样本公共库
-│   ├── export_dashboard.py       #   导出看板数据
-│   ├── dashboard\                #   在线监测看板(前端, 详见 dashboard/README.md)
+│   ├── export_dashboard.py       #   导出看板数据(主样本 6 组) → ..\dashboard\data\
 │   ├── 001..027\                 #   原始试件数据(光纤/AE/应变 CSV)
 │   ├── aligned\ weak_labels\ cache\   # 对齐输出 / 弱标签 / 逐点 D 缓存
 │   ├── results\  figures\        #   主样本产物
 │   └── 数据记录.xlsx  018全流程.mp4
 │
 └── l1\                           # ── 公开集 L1-03/04/05/09（自包含）──
+    ├── l1_meta.py                #   ★ 元信息自适应: 从 L1-xx.pdf 自动解析 n_f / 左右脚空间段
     ├── step0.py                  #   原始 .pridb/.txt → CSV
     ├── reproduce_broer_l1.py     #   论文复现: Level1 检测 + Level4 严重度 (--mode all)
     ├── evaluate_l1_degree.py     #   D(t) 迁移: 基线重定义 + 应变漂移证据
     ├── evaluate_l1.py            #   光纤(FBG) 块级 HI
     ├── evaluate_l1_dfos.py       #   分布式应变(DFOS) 逐块分析 + 热图
-    ├── L1-03\ L1-04\ L1-05\ L1-09\   # 原始数据
+    ├── export_dashboard_l1.py    #   导出 L1 看板数据 → ..\dashboard\data\L1-xx.js
+    ├── L1-03\ L1-04\ L1-05\ L1-09\   # 原始数据(含 L1-xx.pdf 官方数据表)
     ├── *.pdf                     #   论文/参考
     └── results\  figures\        #   L1 产物
 ```
-
-> 脚本内部路径均为**自定位**（`ROOT=脚本所在目录`；`sys.path` 指向项目根以导入 `shm`），
-> 因此可从任意工作目录运行。
 
 ## 3. 正式方法：连续损伤度 D(t)
 
@@ -92,9 +92,9 @@ d:\lixiang\
 
 - 可调参数集中在构造参数（`rise/fall/acc_scale/estrain_w/lift` 等）；含消融开关(`abl`)与结构试验开关。
 - **块级统计单位**：`EXT_BLOCK_PTS=500`。
-- **损伤确认后加速追赶（latch，2026-09-08 起默认开）**：D 慢 rise 追不满断裂前脉冲证据曾使 0.85 级 0/6 不可达；
-  现当 D 经**不可逆确认**（最近 3 块 `min≥0.15 且 ≥0.30`，与 A-预警判据同源）后，对 risk 用**快 rise 追赶**
-  → 达 0.85 级 0/6→6/6，且预警 onset/分级完全不变（6 组验证，无副作用）。
+- **损伤确认后加速追赶（latch，默认开）**：当 D 经**不可逆确认**（最近 3 块 `min≥0.15 且 ≥0.30`，
+  与 A-预警判据同源）后，对 risk 用**快 rise 追赶**（`latch_rise_fast`），保证 0.85 级可达，
+  且不改变预警 onset 与分级（6 组验证）。
 - **评估口径**：A-预警 = D 首次“不可逆”≥0.3（2% 寿命窗内不回落到 0.15）。
 
 ### 3.2 两类数据集适配对比
@@ -141,24 +141,24 @@ D 断裂前单调不回落；**达 0.55 级 6/6、达 0.85 级 6/6**（latch，t
 | ----- | ---- | --------- | --------------- | ----------- | ------- | -------- |
 | L1-03 | 152k | 0.000     | **1.000** | 87.5k       | 71.5k   | 130.5k   |
 | L1-04 | 280k | 0.000     | **1.000** | 179k        | 95k     | 222k     |
-| L1-05 | 145k | 0.000     | **1.000** | 107k        | 115k    | 132k     |
-| L1-09 | 133k | 0.000     | **1.000** | —          | 57.5k   | 127k     |
+| L1-05 | 145k | 0.000     | **1.000** | 125k        | 115k    | 132k     |
+| L1-09 | 133k | 0.000     | **1.000** | 55.5k       | 57.5k   | 127k     |
 
 - 四组 **HI_F 均 0→1**；L1-03/04/05 检测点与论文描述吻合（L1-03：前 10k + 25k 后 + ~70k 起持续）。
-- 关键修正：压缩脚=受载更负侧（L1-03/04/05 为左脚，**L1-09 为右脚**）；HI_OFc/t 用带符号相对首测变化；
-  变点 σ 全程恒定；peak 行要求两脚同时受压；L1-05 负值截断；Level 4 每脚均值窗 5 平滑。
+- 实现要点：压缩脚=受载更负侧（L1-03/04/05 为左脚，**L1-09 为右脚**）；HI_OFc/t 用带符号相对首测变化；
+  σ 全程恒定；peak 行要求两脚同时受压；HI_OF 负值截断；Level 4 每脚均值窗 5 平滑。
 
 #### 4.2.2 迁移主样本 D(t)（基线重定义 + 应变漂移证据）
 
 脚本 `evaluate_l1_degree.py`（推荐配置 `--baseline --strain-evidence --fusion max --params rise=0.05`；
 `l1/results/l1_degree.csv`）：
 
-| gid   | n_f  | c0  | D_end | 达0.85 | 占寿命 | 预警提前 | 评价      |
-| ----- | ---- | --- | ----- | ------ | ------ | -------- | --------- |
-| L1-03 | 152k | 70k | 0.999 | 120.0k | 78.7%  | 32.5k    | ✓ 好     |
-| L1-04 | 280k | 30k | 0.930 | 75.0k  | 26.8%  | 205k     | ✗ 仍过早 |
-| L1-05 | 145k | 65k | 0.998 | 115.0k | 79.3%  | 30.0k    | ✓ 好     |
-| L1-09 | 133k | 25k | 1.000 | 70.0k  | 52.5%  | 63.3k    | ○ 中等   |
+| gid   | n_f  | c0  | D_end | 达0.85 | 占寿命 | 预警提前 | 评价    |
+| ----- | ---- | --- | ----- | ------ | ------ | -------- | ------- |
+| L1-03 | 152k | 70k | 0.999 | 120.0k | 78.7%  | 32.5k    | ✓ 好   |
+| L1-04 | 280k | 30k | 0.930 | 75.0k  | 26.8%  | 205k     | ✗ 过早 |
+| L1-05 | 145k | 65k | 0.998 | 115.0k | 79.3%  | 30.0k    | ✓ 好   |
+| L1-09 | 133k | 25k | 1.000 | 70.0k  | 52.5%  | 63.3k    | ○ 中等 |
 
 **融合方式对比**（达0.85 占寿命%）：
 
@@ -168,12 +168,52 @@ D 断裂前单调不回落；**达 0.55 级 6/6、达 0.85 级 6/6**（latch，t
 | mean（等权）          | 98.4% | 未达  | 93.1% | 未达  |
 | min（互证）           | 未达  | 未达  | 未达  | 未达  |
 
-→ **max 总体最优**；3/4 组得到有意义预警。相对默认参数（~20% 寿命即饱和）已显著改善。
+→ **max 总体最优**；3/4 组得到有意义预警。
 
-- **L1-04 仍过早**：其 AE 只覆盖 **61.3%** 寿命（止于 171.7k，失效在 280k），
+- **L1-04 预警过早**：其 AE 只覆盖 **61.3%** 寿命（止于 171.7k，失效在 280k），
   且 30–70k 有真实 AE 活动（论文标注该段刚度退化识别 “erroneous”），显著损伤在 240k
   （**论文本身也只能在 240k/≈86% 寿命检出**）。AE 与应变证据“早/晚”不一致，在“不改试件专属参数”下难同时满足。
-- **应变漂移证据的作用**：修复了 L1-04 的 D 末段衰减（D_end 0.852→0.930）。
+- **应变漂移证据的作用**：在 AE 覆盖不足的区段由（100% 覆盖的）应变漂移接管，避免 D 末段回落。
+
+#### 4.2.3 光纤（FBG）块级 HI —— 单源光纤损伤指标
+
+脚本 `evaluate_l1.py --mode hi`（`l1/results/l1_hi_metrics.csv`）。
+方法：FBG 应变 = **全部 FBG 应变通道均值**（表头自适应）；按 300s 间隙切块（≈5000 cycle/块）；
+**基线 = 首个测量块**；$dev=|s-s_{base}|$，归一尺度取全窗 90 分位；
+HI 升快降慢（$\alpha=0.5$，回落系数 0.15）。
+
+| gid   | 块数 | 基线应变(µε) | 末块应变(µε) | 漂移  | dev_scale | HI_end          | 尾段单调 | HI达0.25 | HI达0.50 | HI达0.70 |
+| ----- | ---- | -------------- | -------------- | ----- | --------- | --------------- | -------- | -------- | -------- | -------- |
+| L1-03 | 30   | −1332.8       | −1614.8       | −282 | 150.4     | **0.982** | 87.5%    | 58.4k    | 109.3k   | 129.6k   |
+| L1-04 | 56   | −1496.0       | −1496.2       | −0.2 | 105.4     | 0.721           | 81.2%    | 7.5k     | 192.6k   | 207.6k   |
+| L1-05 | 29   | −1512.1       | −1492.9       | +19   | 62.3      | 0.831           | 87.5%    | 7.5k     | 12.5k    | 17.5k    |
+| L1-09 | 28   | −802.0        | +48.6          | +851  | 280.0     | 0.993           | 100%     | 11.9k    | 21.4k    | 54.7k    |
+
+- L1-03/05/09 尾段单调 ≥87.5%、末值 0.83~0.99，块级应变漂移方向与压缩脚受压一致。
+- **L1-04 应变几乎零漂移（−0.2 µε）→ HI_end 仅 0.721**，从**光纤单源**独立佐证了其“AE 覆盖不足/证据冲突”
+  的固有难点；其早段（7.5k）触阈源于小尺度噪声，可靠性低。
+
+#### 4.2.4 分布式应变（DFOS）块级 HI —— 脱粘局部峰
+
+脚本 `evaluate_l1_dfos.py --mode hi`（`l1/results/l1_dfos_metrics.csv`）。
+方法：DFOS 行按 FBG 块时间窗归块 → 每块取**空间分布中位曲线**；先做**空间去尖峰**（掉点修复）
+再与**健康基线（块 0 分布）**比对，取**局部滑窗（100 点 ≈65mm）最强偏离**作脱粘特征，
+归一后取**单调包络**。
+
+| gid   | 块数 | 基线NaN点 | 去尖峰点数 | rmse_end | local_scale | HI_end          | 尾段单调 | HI达0.25 | HI达0.50 | HI达0.70 |
+| ----- | ---- | --------- | ---------- | -------- | ----------- | --------------- | -------- | -------- | -------- | -------- |
+| L1-03 | 30   | 0         | 0          | 344.7    | 1026.7      | **1.000** | 100%     | 7.6k     | 7.6k     | 7.6k     |
+| L1-04 | 56   | 0         | 7          | 548.5    | 3982.4      | **1.000** | 100%     | 32.5k    | 32.5k    | 32.5k    |
+| L1-05 | 29   | 0         | 5          | 562.3    | 3966.2      | **1.000** | 100%     | 17.5k    | 17.5k    | 17.5k    |
+| L1-09 | 28   | 19        | 273        | 529.0    | 2351.9      | **1.000** | 100%     | 7.1k     | 7.1k     | 11.9k    |
+
+- 四组 **HI 末值全为 1.000、尾段单调 100%**，且与“压缩脚方向由 DFOS 判定”自洽 → 可作**结构性劣化的确证性辅证**。
+- **去尖峰与鲁棒性**：全分辨率网格（0.65 mm 间距）本底残差 p50≈2.5 / p99≈28 µε，与掉点完全分离；
+  判据 `|值−局部中位| > max(3000 µε, 8×1.4826·MAD)`，命中点用局部中位替换；命中点数见上表
+  （L1-03 0 / L1-04 7 / L1-05 5 / L1-09 273）。HI 取“100 点滑窗均值”，对单点尖峰**天然免疫**，
+  故该指标对光纤掉点是鲁棒的。
+- ⚠️ 但**阈达时间偏早**（0.25/0.50/0.70 常同步触发）：源于“单调包络”会把早期局部噪声一次锁定，
+  **不宜单独用于预警**；后续可改为“峰值增长率”类指标（见 §9）。
 
 ### 4.3 两数据集对比小结
 
@@ -209,17 +249,17 @@ D 断裂前单调不回落；**达 0.55 级 6/6、达 0.85 级 6/6**（latch，t
 
 ### 6.1 任务矩阵（`run.py`）
 
-| task         | 说明            | main (016-022)                             | l1 (L1-03/04/05/09)                              |
-| ------------ | --------------- | ------------------------------------------ | ------------------------------------------------ |
-| `prepare`  | 数据准备        | `main/prepare_data.py align`             | `l1/step0.py`（原始→CSV）                       |
-| `labels`   | 弱标签/失效锚   | `main/prepare_data.py weaklabels`        | —（无弱标签；以 n_f 为锚）                      |
-| `degree`   | D(t)+分级       | `main/evaluate.py degree`                | `l1/evaluate_l1_degree.py`（基线重定义+应变证据） |
-| `warning`  | 预警 onset/分级 | `main/evaluate.py warning`               | （含在 degree 的`l1/results/l1_degree.csv`）      |
-| `curves`   | D(t) 曲线出图   | `main/evaluate.py curves`                | `l1/evaluate_l1_degree.py`（逐组图）            |
-| `paper`    | 论文图表        | `main/evaluate.py paper`（四联图+流程图） | `l1/reproduce_broer_l1.py`（Level1/4 复现）    |
-| `dfos`     | 分布式应变分析  | —                                         | `l1/evaluate_l1_dfos.py`                       |
-| `fiber-hi` | 光纤块级 HI     | —                                         | `l1/evaluate_l1.py`                            |
-| `robust`   | 稳健性/统计     | `main/robustness.py sens/loso/ablation/stats` | —（未做）                                    |
+| task         | 说明            | main (016-022)                                  | l1 (L1-03/04/05/09)                                 |
+| ------------ | --------------- | ----------------------------------------------- | --------------------------------------------------- |
+| `prepare`  | 数据准备        | `main/prepare_data.py align`                  | `l1/step0.py`（原始→CSV）                        |
+| `labels`   | 弱标签/失效锚   | `main/prepare_data.py weaklabels`             | —（无弱标签；以 n_f 为锚）                         |
+| `degree`   | D(t)+分级       | `main/evaluate.py degree`                     | `l1/evaluate_l1_degree.py`（基线重定义+应变证据） |
+| `warning`  | 预警 onset/分级 | `main/evaluate.py warning`                    | （含在 degree 的`l1/results/l1_degree.csv`）      |
+| `curves`   | D(t) 曲线出图   | `main/evaluate.py curves`                     | `l1/evaluate_l1_degree.py`（逐组图）              |
+| `paper`    | 论文图表        | `main/evaluate.py paper`（四联图+流程图）     | `l1/reproduce_broer_l1.py`（Level1/4 复现）       |
+| `dfos`     | 分布式应变分析  | —                                              | `l1/evaluate_l1_dfos.py`                          |
+| `fiber-hi` | 光纤块级 HI     | —                                              | `l1/evaluate_l1.py`                               |
+| `robust`   | 稳健性/统计     | `main/robustness.py sens/loso/ablation/stats` | —（未做）                                          |
 
 **结论**：L1 **不是**主样本的“同任务子集”，而是**任务清单不同**——
 L1 独有 `paper`(论文复现)/`dfos`/`fiber-hi`，主样本独有 `labels`/`robust`；
@@ -227,20 +267,19 @@ L1 独有 `paper`(论文复现)/`dfos`/`fiber-hi`，主样本独有 `labels`/`ro
 
 ### 6.2 各脚本子命令
 
-| 脚本                      | 子命令                                            | 作用                                                |
-| ------------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| `main/prepare_data.py`       | `align` / `weaklabels`                        | 多源对齐 →`main/aligned/`；弱标签 → `main/weak_labels/` |
-| `main/evaluate.py`           | `degree`/`warning`/`curves`/`paper`       | D 达阈 / A-预警 / 6 组曲线 / 论文图                 |
-| `main/robustness.py`         | `sens`/`loso`/`ablation`/`stats`          | 参数敏感性 / 留一 CV / 消融 / 统计                  |
-| `main/eval_common.py`        | —                                                | 主样本公共库（组集/指标/缓存/流式）                |
-| `main/export_dashboard.py`   | —                                                | 导出看板数据 →`main/dashboard/data/*.js`         |
-| `l1/step0.py`              | —                                                | L1 原始 .pridb/.txt → CSV                          |
-| `l1/reproduce_broer_l1.py` | `level1`/`level4`/`plot`/`all`            | L1 论文 Level1 检测 / Level4 严重度 / 图            |
-| `l1/evaluate_l1_degree.py` | `--baseline`/`--strain-evidence`/`--fusion` | L1 D(t) 迁移                                        |
-| `l1/evaluate_l1.py`        | `hi`/`plot`                                   | L1 光纤(FBG)块级 HI                                 |
-| `l1/evaluate_l1_dfos.py`   | `hi`/`plot`                                   | L1 分布式应变(DFOS)逐块                             |
-
-> 说明：早期同名独立脚本已全部合并；主样本请用 3 个阶段脚本，勿引用旧文件名。
+| 脚本                          | 子命令                                            | 作用                                                          |
+| ----------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
+| `main/prepare_data.py`      | `align` / `weaklabels`                        | 多源对齐 →`main/aligned/`；弱标签 → `main/weak_labels/` |
+| `main/evaluate.py`          | `degree`/`warning`/`curves`/`paper`       | D 达阈 / A-预警 / 6 组曲线 / 论文图                           |
+| `main/robustness.py`        | `sens`/`loso`/`ablation`/`stats`          | 参数敏感性 / 留一 CV / 消融 / 统计                            |
+| `main/eval_common.py`       | —                                                | 主样本公共库（组集/指标/缓存/流式）                           |
+| `main/export_dashboard.py`  | —                                                | 导出主样本看板数据 →`dashboard/data/{016..022,index}.js`   |
+| `l1/export_dashboard_l1.py` | —                                                | 导出 L1 看板数据 →`dashboard/data/{L1-xx,index_l1}.js`     |
+| `l1/step0.py`               | —                                                | L1 原始 .pridb/.txt → CSV                                    |
+| `l1/reproduce_broer_l1.py`  | `level1`/`level4`/`plot`/`all`            | L1 论文 Level1 检测 / Level4 严重度 / 图                      |
+| `l1/evaluate_l1_degree.py`  | `--baseline`/`--strain-evidence`/`--fusion` | L1 D(t) 迁移                                                  |
+| `l1/evaluate_l1.py`         | `hi`/`plot`                                   | L1 光纤(FBG)块级 HI                                           |
+| `l1/evaluate_l1_dfos.py`    | `hi`/`plot`                                   | L1 分布式应变(DFOS)逐块                                       |
 
 ## 7. 运行与复现
 
@@ -261,6 +300,11 @@ set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
 %PY% l1\evaluate_l1_degree.py --baseline --strain-evidence --fusion max --params rise=0.05
 %PY% l1\evaluate_l1_dfos.py --mode hi
 %PY% l1\evaluate_l1.py --mode hi
+
+# ── 在线监测看板（一套前端, 两类数据集）──
+%PY% main\export_dashboard.py                    # 主样本 6 组 → dashboard\data\{016..022,index}.js
+%PY% l1\export_dashboard_l1.py                   # L1  4 组 → dashboard\data\{L1-xx,index_l1}.js
+# 双击 dashboard\index.html 即可回放(顶栏可切换数据集/试件)
 
 # ── 或统一入口（推荐）──
 %PY% run.py --dataset main --task all
@@ -300,3 +344,5 @@ set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
   - L1-04 的“早/晚证据冲突”与 AE 覆盖不足为固有难点（论文亦仅 240k 检出）；如需改善可评估
     “按试件自适应 c0”或“应变速率型证据”，但须避免试件专属硬编码。
   - DFOS 局部脱粘峰增长指标（论文 Level 3 思路）可作后续 DFOS 主证据尝试。
+  - **DFOS 块级 HI 阈达偏早**（§4.2.4）：现用“归一 + 单调包络”会把早期噪声一次锁定，
+    后续应改为**峰值增长率 / 相对基线的相对增幅**，并与 FBG 块级 HI 交叉印证。
