@@ -2,7 +2,7 @@
 """统一入口 —— 在两类数据集间自由切换并执行对应任务
 
 数据集:
-  main : 内部疲劳机主样本 016-022 (服役期渐进损伤)
+  main : 内部疲劳机主样本 016-020 (服役期渐进损伤)
   l1   : 公开集 ReMAP/TU-Delft L1-03/04/05/09 (冲击后疲劳)
 
 用法:
@@ -39,6 +39,8 @@ TASKS = {
                     ['main/robustness.py', 'loso'],
                     ['main/robustness.py', 'ablation'],
                     ['main/robustness.py', 'stats']],
+        'fusion':  [['main/fusion_compare.py']],              # 源融合对照(单源/二源/三源)
+        'grade':   [['main/grade_compare.py']],               # 级别层异源分级(刚度损失闸门)
         'dashboard': [['main/export_dashboard.py']],          # → dashboard/data/
     },
     'l1': {
@@ -57,18 +59,20 @@ DESC = {
     'labels':   ('弱标签/失效锚', 'prepare_data.py weaklabels: b2/b3 弱标签', '（无弱标签；以 n_f 为失效锚）'),
     'degree':   ('连续损伤度 D(t)+分级', 'evaluate.py degree: D 达阈/单调', 'evaluate_l1_degree.py: 基线重定义+应变漂移证据'),
     'warning':  ('预警 onset/分级', 'evaluate.py warning: A-预警', '（含在 degree 输出的 results/l1_degree.csv）'),
-    'curves':   ('D(t) 曲线出图', 'evaluate.py curves: 6 组曲线', 'evaluate_l1_degree.py: 逐组图'),
+    'curves':   ('D(t) 曲线出图', 'evaluate.py curves: 5 组曲线', 'evaluate_l1_degree.py: 逐组图'),
     'paper':    ('论文图表', 'evaluate.py paper: 四联图+流程图', 'reproduce_broer_l1.py: 论文 Level1/4 复现'),
     'dfos':     ('分布式应变分析', '—', 'evaluate_l1_dfos.py: 逐块+热图'),
     'fiber-hi': ('光纤块级 HI', '—', 'evaluate_l1.py: FBG 块级 HI'),
     'robust':   ('稳健性/统计', 'robustness.py: sens/loso/ablation/stats', '— （未做）'),
+    'fusion':   ('源融合对照', 'fusion_compare.py: 5 组 × 9 配置', '—'),
+    'grade':    ('级别层异源分级', 'grade_compare.py: 刚度损失闸门', '—'),
     'dashboard': ('看板数据导出', 'export_dashboard.py → dashboard/data/', 'export_dashboard_l1.py → dashboard/data/'),
 }
 
 
 def print_matrix():
     print('任务矩阵 (dataset × task):\n')
-    hdr = f'{"task":<10}{"说明":<20}{"main (016-022)":<40}{"l1 (L1-03/04/05/09)":<40}'
+    hdr = f'{"task":<10}{"说明":<20}{"main (016-020)":<40}{"l1 (L1-03/04/05/09)":<40}'
     print(hdr)
     print('-' * len(hdr))
     for t, (name, m, l) in DESC.items():
