@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""阶段③ 方法稳健性研究（6 组主样本）
+"""阶段③ 方法稳健性研究（5 组主样本）
 
 子命令（可组合，如 `python robustness.py sens loso ablation` 或 `all`）：
   sens      参数 ±30% 敏感性 → results/parameter_sensitivity.csv（缓存 cache/_t7_cache）
@@ -186,7 +186,7 @@ ABL_MODES = [
     ('only_strain', '仅应变证据'),
     ('no_accum', '去单调累积(D=risk)'),
 ]
-KEY = ['016', '020', '017', '019', '022']   # 消融展示重点组(均属主样本)
+KEY = ['016', '020', '017', '019']   # 消融展示重点组(均属主样本)
 
 
 def _abl_run_one(args):
@@ -322,13 +322,13 @@ def cmd_stats():
     for m in modes:
         print(f'  {STATS_MODES[m]}: {int((df[f"{m}_grade"]=="C").sum())}')
 
-    print('\n=== Bootstrap 95% CI(主样本 6 组, 试件重采样) ===')
+    print('\n=== Bootstrap 95% CI(主样本 5 组, 试件重采样) ===')
     lo, hi = bootstrap_ci(a_full)
     print(f'  D  |err| 均值 CI: [{lo:.1f}, {hi:.1f}]  样本均值 {np.nanmean(a_full):.1f}')
     lead = df['full_lead'].to_numpy(float)
     lo2, hi2 = bootstrap_ci(lead)
     print(f'  D  断裂前提前量 lead 均值 CI: [{lo2:.1f}, {hi2:.1f}]  样本均值 {np.nanmean(lead):.1f}')
-    print('  (小样本 n=6，CI 仅示意；结论需谨慎解读)')
+    print('  (小样本 n=5，CI 仅示意；结论需谨慎解读)')
     print('结果已存: results/statistical_test.csv')
 
 

@@ -1081,7 +1081,7 @@
     }
     // 主样本清单向后兼容: export_dashboard.py 写的是 window.SHM_INDEX
     if (window.SHM_INDEX && window.SHM_INDEX.length && !seen.main) {
-      dss.unshift({ id: 'main', name: '疲劳机主样本 016-022', unit: 's', path: 'data/',
+      dss.unshift({ id: 'main', name: '疲劳机主样本 016-020', unit: 's', path: 'data/',
         groups: window.SHM_INDEX });
     }
     return dss;

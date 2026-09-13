@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""阶段② 主样本评估与出图（6 组 016-020, 022）
+"""阶段② 主样本评估与出图（5 组 016-020）
 
 子命令（可组合，如 `python evaluate.py degree warning` 或 `all`）：
   degree   评估损伤度 D 达阈/单调 → results/damage_degree_metrics.csv（缓存 cache/_hi_cache）
@@ -169,7 +169,7 @@ def cmd_curves():
         ax.grid(alpha=0.3)
     for ax in axes[n:]:                       # 多余子图隐藏
         ax.axis('off')
-    fig.suptitle('主样本 6 组 D(t) 曲线（默认 v6+latch；分级 0.25/0.55/0.85；绿虚线 b2，黑点线 b3=断裂）',
+    fig.suptitle('主样本 5 组 D(t) 曲线（默认 v6+latch；分级 0.25/0.55/0.85；绿虚线 b2，黑点线 b3=断裂）',
                  fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     out = os.path.join(FIGDIR, 'damage_degree_curves.png')

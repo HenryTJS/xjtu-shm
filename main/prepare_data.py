@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""阶段① 数据准备：多源对齐 + 弱标签（6 组主样本 016-020, 022）
+"""阶段① 数据准备：多源对齐 + 弱标签（5 组主样本 016-020）
 
 子命令（可组合，如 `python prepare_data.py align weaklabels` 或 `all`）：
   align       多源数据对齐(AE 网格) → aligned/
@@ -16,7 +16,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))                            
 from shm.data_loader import DataLoader   # weaklabels 用
 
 ROOT = os.path.dirname(os.path.abspath(__file__))   # <项目根>\main
-GROUPS = ['016', '017', '018', '019', '020', '022']   # 主样本 6 组
+GROUPS = ['016', '017', '018', '019', '020']   # 主样本 5 组
 
 # ============================================================
 # 子命令 align —— 多源对齐（AE 网格模式）

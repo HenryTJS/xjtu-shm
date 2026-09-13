@@ -2,7 +2,7 @@
 """导出疲劳机多源在线监测看板数据
 =====================================
 
-把 6 组主样本(016/017/018/019/020/022)的**逐点在线流式**结果
+把 5 组主样本(016/017/018/019/020)的**逐点在线流式**结果
 (连续损伤度 D(t)、证据层 e_ae/e_strain/risk、分级 level、各源原始信号)
 降采样打包为前端直接可用的 JS 数据文件。
 
@@ -37,7 +37,7 @@ sys.path.insert(0, ROOT)                     # main/(eval_common)
 os.chdir(ROOT)
 
 from eval_common import ref_map                      # noqa: E402
-from shm.config import DEFAULT_GROUPS                # noqa: E402
+from shm.config import DEFAULT_GROUPS, GRADE_GATE    # noqa: E402
 from shm.damage_index import OnlineDamageIndex       # noqa: E402
 from shm.streaming import StreamSimulator            # noqa: E402
 
@@ -59,7 +59,7 @@ def _pack(gid):
     """流式跑一组 → 数据包(dict)。"""
     sim = StreamSimulator(gid)
     n = sim.load_data()
-    di = OnlineDamageIndex()
+    di = OnlineDamageIndex(GRADE_GATE.get(gid, {}))   # 逐组级别闸门(见 shm/config.py)
     nfr = (n + STEP - 1) // STEP
 
     T = np.zeros(nfr, dtype=np.float64)

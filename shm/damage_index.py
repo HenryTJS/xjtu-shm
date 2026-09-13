@@ -15,11 +15,79 @@ T7 参数化: 全部可调参数集中在 __init__ kwargs(默认=v6 配置)。
   e_full   = 全能量累积 log 加速度(短/长窗斜率差 EWMA)
   e_ae     = max(e_dmg, e_full)
   e_strain = estrain_w × 应变 std 相对滚动低分位发散
-  risk     = max(e_ae, e_strain)
+  e_fo     = fo_w × 光纤多通道"去共模空间极差"相对运行中位发散
+  risk     = max(启用源的证据)   —— 源由 sources 掩码逐组声明
   D        = 升快降慢累积(rise 追 risk, fall 回落)
+
+源掩码(sources): 声发射为主源且每组必做('ae'); 应变('strain')/光纤('fo')为辅助源,
+  逐组按数据有无声明。sources=('ae',) 即声发射单源基线。默认 ('ae','strain') 与
+  e_fo 引入前的行为一致(fo 不在默认掩码内), 保证历史结果可复现。
 """
 import numpy as np
 from .config import EXT_BLOCK_PTS
+
+
+class _AmpChannel:
+    """单通道“循环幅值”跟踪器。
+
+    背景: 载荷 5 Hz、采样 10 Hz → **每周期恰好 2 个采样点**，未解调的通道会交替
+    采到峰/谷，此时 块均值=直流电平、**块内 std=幅值**；已解调的通道则数值本身就是幅值。
+    两种约定在同批数据里混存(实测 016 应变已解调, 其余 25 个通道均未解调),
+    故按通道自动判别, 否则会把“直流电平”错当幅值。
+
+    判定量(对采样“翻相”免疫): alt = mean|Δx₁| / mean|Δx₂|
+      alt ≫ 1 → 未解调振荡 (相邻差大、隔点差≈零)
+      alt ≈ 1 → 已解调平滑
+    实测两簇分离清楚: 016 应变=0.94, 其余通道 4.9~352。
+    """
+
+    def __init__(self, demod_win, demod_th):
+        self.demod_win = int(demod_win)
+        self.demod_th = float(demod_th)
+        self._p1 = None
+        self._p2 = None
+        self._d1 = 0.0
+        self._d2 = 0.0
+        self._dn = 0
+        self.raw = None          # None=未判别; True=未解调; False=已解调
+        self._bn = 0
+        self._bsum = 0.0
+        self._bsq = 0.0
+
+    def add(self, v):
+        v = float(v)
+        if not np.isfinite(v):
+            return
+        if self.raw is None:
+            if self._p1 is not None and self._p2 is not None:
+                self._d1 += abs(v - self._p1)
+                self._d2 += abs(v - self._p2)
+                self._dn += 1
+            self._p2 = self._p1
+            self._p1 = v
+            if self._dn >= self.demod_win:
+                self.raw = bool(self._d1 / max(self._d2, 1e-12) > self.demod_th)
+        self._bn += 1
+        self._bsum += v
+        self._bsq += v * v
+
+    def block_amp(self):
+        """结算本块幅值并清零; 本块无数据→None。"""
+        if self._bn == 0:
+            return None
+        n = self._bn
+        m = self._bsum / n
+        sd = float(np.sqrt(max(0.0, self._bsq / n - m * m)))
+        amp = sd if (self.raw is None or self.raw) else abs(m)
+        self._bn = 0
+        self._bsum = 0.0
+        self._bsq = 0.0
+        return amp
+
+    def mode(self):
+        if self.raw is None:
+            return '?'
+        return 'RAW' if self.raw else 'DEMOD'
 
 
 class OnlineDamageIndex:
@@ -34,6 +102,39 @@ class OnlineDamageIndex:
         self.estrain_w = float(p.get('estrain_w', 0.6))
         self.strain_ratio_gain = float(p.get('strain_ratio_gain', 2.0))
         self.estrain_min_blocks = int(p.get('estrain_min_blocks', 20))
+        # --- 源掩码融合 ---
+        # 声发射为主源(ae, 每组必做); 应变(strain)与光纤(fo)为辅助源, 逐组按数据有无声明。
+        # 默认 ('ae','strain') == 既有行为(fo 未引入前的口径), 保证历史结果可复现。
+        self.sources = tuple(p.get('sources', ('ae', 'strain')))
+        # 融合算子: max(任一源报警) | mean(多源平均) | min(需全源共识)
+        self.fusion = str(p.get('fusion', 'max'))
+        # e_fo(光纤局部化): 多通道块均值 → 减通道均值(消共模: 温度/整体应变) → 跨通道极差
+        #                    → 相对运行中位的增幅 → clip → ×fo_w
+        self.fo_w = float(p.get('fo_w', 0.6))
+        self.fo_ratio_gain = float(p.get('fo_ratio_gain', 1.0))
+        # --- 应变证据双模式 ---
+        # 'std'   : 块内应变 std 相对运行中位发散（旧口径，默认，向后兼容）
+        # 'stiff' : **刚度损失率** = |块均值| 相对运行低分位基线的相对增长
+        #           载荷(应力)控制疲劳下 应变幅值 ∝ 1/刚度, 故相对增长 = 刚度损失率。
+        self.strain_mode = str(p.get('strain_mode', 'std'))
+        # 刚度损失基线: 取**固定校准段** [stiff_cal_lo, stiff_cal_hi) 块的 |块均值| 低分位。
+        # 校准段避开开机瞬态且位于损伤起始之前 —— 物理上对应"初始健康刚度 E0"。
+        # 用运行分位作基线会随退化漂移, 不符合"相对初始刚度"的定义, 故不用。
+        self.stiff_base_pct = float(p.get('stiff_base_pct', 30))
+        self.stiff_cal_lo = int(p.get('stiff_cal_lo', 20))
+        self.stiff_cal_hi = int(p.get('stiff_cal_hi', 45))
+        # --- 级别层闸门(异源分级) ---
+        # >0 时: L2 需 stiff_loss≥lvl2_stiff, L3 需 stiff_loss≥lvl3_stiff。
+        # 设计意图: AE 决定检测级(L1)与 D; 刚度退化只作为 L2/L3 的"确认闸门"，
+        #           从而把"检测"与"退化确认"在时间上分开(分级梯度)。
+        # 默认 0 = 不启用闸门 = 旧行为(级别仅由 D 阈值决定)。
+        self.lvl2_stiff = float(p.get('lvl2_stiff', 0.0))
+        self.lvl3_stiff = float(p.get('lvl3_stiff', 0.0))
+        # --- 通道幅值跟踪(自动判别解调状态) ---
+        # demod_win: 判别所需点数(10Hz 下 5000 点=500s=10 块, 远早于校准段)
+        # demod_th : alt 阈值(实测两簇: 0.94 vs ≥4.9, 取 2.0 余量充足)
+        self.demod_win = int(p.get('demod_win', 5000))
+        self.demod_th = float(p.get('demod_th', 2.0))
         # --- D 状态机(可校准) ---
         self.rise = float(p.get('rise', 0.12))
         self.fall = float(p.get('fall', 0.008))
@@ -61,7 +162,7 @@ class OnlineDamageIndex:
         # --- 方向A: 损伤不可逆确认后加速追赶(latch) —— 默认开(解决 0.85 不可达) ---
         # 目的: 解决 D 慢 rise 追不满断裂前脉冲证据 → 0.85(临危)级不可达。
         # 机制: 当 D 经确认(最近 conf_blk 块 min≥conf_drop 且 ≥conf_low)后, 对 risk 用快 rise 追赶。
-        # 6 组主样本验证(2026-09-08): 达0.85 0/6→6/6, 预警 onset/分级完全不变(无副作用)。
+        # 主样本 5 组验证: 达 0.85 级全部可达, 且预警 onset/分级不受影响。
         self.latch_enable = bool(p.get('latch_enable', True))
         self.latch_conf_low = float(p.get('latch_conf_low', 0.30))
         self.latch_conf_drop = float(p.get('latch_conf_drop', 0.15))
@@ -75,6 +176,11 @@ class OnlineDamageIndex:
         self._block_dmg = 0.0        # 块损伤型能量
         self._block_all = 0.0        # 块全能量(事件)
         self._strain_vals = []
+        self._st_amps = []
+        self.stiff_loss = 0.0
+        self._amp_st = _AmpChannel(self.demod_win, self.demod_th)
+        self._amp_fo = {}
+        self._fo_amp = {}
         self._bg_loge = []
         self._bg_ready = False
         self._dlog_s = 0.0           # 损伤型块 log EWMA
@@ -88,6 +194,7 @@ class OnlineDamageIndex:
         self.level = 0
         self._last_e_ae = 0.0
         self._last_e_strain = 0.0
+        self._last_e_fo = 0.0
         self._ready = False
         self._ae_ch = False
         self._st_ch = False
@@ -141,7 +248,25 @@ class OnlineDamageIndex:
             self._last_e_ae = e_dmg
         else:
             self._last_e_ae = max(e_dmg, e_full)
-        # e_strain (降权)
+        # --- 刚度损失率(因果, 载荷控制不变量) ---
+        # 幅值 = 本块 std(未解调通道) 或 |本块均值|(已解调通道), 由 _AmpChannel 自动判定。
+        # 基线 = 固定校准段 [stiff_cal_lo, stiff_cal_hi) 块幅值的低分位(≈初始健康刚度)。
+        amp_st = self._amp_st.block_amp()
+        stiff = 0.0
+        if amp_st is not None:
+            self._st_amps.append(amp_st)
+            if len(self._st_amps) > 200:
+                self._st_amps.pop(0)
+        lo, hi = int(self.stiff_cal_lo), int(self.stiff_cal_hi)
+        if amp_st is not None and self._bcount > hi and len(self._st_amps) > hi:
+            win = np.asarray(self._st_amps[lo:hi], dtype=float)
+            win = win[np.isfinite(win)]
+            if len(win) >= 5:
+                sbm = float(np.percentile(win, self.stiff_base_pct))
+                if sbm > 1e-9:
+                    stiff = float(max(0.0, amp_st / sbm - 1.0))
+        self.stiff_loss = stiff
+        # e_strain (降权): 按 strain_mode 选择构造
         e_strain = 0.0
         self._has_st_this = bool(self._strain_vals)
         if self._strain_vals:
@@ -149,23 +274,66 @@ class OnlineDamageIndex:
             self._strain_vals = []
             if len(self._strain_stds) > 120:
                 self._strain_stds.pop(0)
-        if len(self._strain_stds) >= self.estrain_min_blocks:
+        if self.strain_mode == 'stiff':
+            e_strain = float(min(stiff / max(self.strain_ratio_gain, 1e-9), 1.0)) * self.estrain_w
+        elif len(self._strain_stds) >= self.estrain_min_blocks:
             sbase = float(np.percentile(self._strain_stds, 50))
             if sbase > 1e-9:
                 ratio = self._strain_stds[-1] / sbase
                 e_strain = float(min(max((ratio - 1.0) / self.strain_ratio_gain, 0.0), 1.0))
                 e_strain *= self.estrain_w
         self._last_e_strain = e_strain
+        # --- e_fo (光纤多通道局部化, 辅助源) ---
+        # 各通道“循环幅值”(std/|mean| 自动判定) 相对自身校准段基线的增长;
+        # 取**跨通道最大增长** = 退化最严重的局部位置 → 局部化证据。
+        e_fo = 0.0
+        if self._amp_fo:
+            gains = []
+            for ch, tr in self._amp_fo.items():
+                a_ch = tr.block_amp()
+                if a_ch is None:
+                    continue
+                hist = self._fo_amp.setdefault(ch, [])
+                hist.append(a_ch)
+                if len(hist) > 200:
+                    hist.pop(0)
+                if self._bcount > hi and len(hist) > hi:
+                    w = np.asarray(hist[lo:hi], dtype=float)
+                    w = w[np.isfinite(w)]
+                    if len(w) >= 5:
+                        fb = float(np.percentile(w, self.stiff_base_pct))
+                        if fb > 1e-9:
+                            gains.append(max(0.0, a_ch / fb - 1.0))
+            if gains:
+                g = float(max(gains))
+                e_fo = float(min(g / max(self.fo_ratio_gain, 1e-9), 1.0)) * self.fo_w
+        self._last_e_fo = e_fo
         # --- 在线就绪检测(route A) ---
         if self.ready_mode != 'off':
             self._check_ready()
-        # --- risk / D(按消融模式) ---
+        # --- risk / D(源掩码融合 + 消融模式) ---
+        # risk = max(启用源的证据)。声发射为主源; strain/fo 按 sources 声明参与。
+        # abl='only_strain'/'no_strain' 保留为消融专用覆盖(不改变既有消融口径)。
         if self.abl == 'only_strain':
             self.risk = e_strain
         elif self.abl == 'no_strain':
             self.risk = self._last_e_ae
         else:
-            self.risk = max(self._last_e_ae, e_strain)
+            evs = []
+            if 'ae' in self.sources:
+                evs.append(self._last_e_ae)
+            if 'strain' in self.sources:
+                evs.append(e_strain)
+            if 'fo' in self.sources:
+                evs.append(e_fo)
+            if not evs:
+                self.risk = 0.0
+            elif self.fusion == 'mean':
+                self.risk = float(np.mean(evs))
+            elif self.fusion == 'min':
+                self.risk = float(np.min(evs))
+            else:
+                self.risk = float(np.max(evs))
         suppressed = (self._seen_pts <= self._suppress_pts) or \
                      (self.ready_mode != 'off' and not self._ready)
         if suppressed:
@@ -223,13 +391,19 @@ class OnlineDamageIndex:
                 self._ready = True
 
     def _update_level(self):
+        """D 阈值 → 原始级别; 再用刚度损失率作为 L2/L3 闸门(分级梯度)。"""
         lv = 0
         for i, th in enumerate(self.levels):
             if self.damage >= th:
                 lv = i + 1
+        if self.lvl3_stiff > 0 and lv >= 3 and self.stiff_loss < self.lvl3_stiff:
+            lv = 2
+        if self.lvl2_stiff > 0 and lv >= 2 and self.stiff_loss < self.lvl2_stiff:
+            lv = 1
         self.level = lv
 
-    def update(self, strain, ae_peak=None):
+    def update(self, strain, ae_peak=None, fo=None):
+        """逐点推进。fo = {通道名: 值} (光纤, 可选; 缺省或全 NaN 时该块无光纤证据)。"""
         self._bpts += 1
         self._seen_pts += 1
         if ae_peak is not None:
@@ -238,6 +412,22 @@ class OnlineDamageIndex:
             self._on_event(peak)
         if strain is not None and not np.isnan(strain):
             self._strain_vals.append(strain)
+            self._amp_st.add(strain)
+        if fo:
+            for k, v in fo.items():
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(fv):
+                    continue
+                t = self._amp_fo.get(k)
+                if t is None:
+                    t = _AmpChannel(self.demod_win, self.demod_th)
+                    self._amp_fo[k] = t
+                t.add(fv)
         if self._bpts >= EXT_BLOCK_PTS:
             self._bpts = 0
             self._block_settle()

@@ -4,7 +4,7 @@
 
 | 数据集                                | 试件                    | 时间基                            | 数据源 / 参考锚                                                    |
 | ------------------------------------- | ----------------------- | --------------------------------- | ------------------------------------------------------------------ |
-| **主样本**（疲劳机）            | 016/017/018/019/020/022 | 秒（`frameDt=0.5`）             | AE 25 通道 + 应变 1 通道；锚 =`b2`/`b3`                        |
+| **主样本**（疲劳机）            | 016-020                 | 秒（`frameDt=0.5`）             | AE 25 通道 + 应变 1 通道；锚 =`b2`/`b3`                        |
 | **公开集 L1**（ReMAP/TU-Delft） | L1-03/04/05/09          | **cycle**（`frameDt=50`） | FBG 10 通道 +**DFOS**；锚 = `c0` + 论文检测点（无 `b2`） |
 
 顶栏数据集下拉可自由切换；前端按数据包自带字段自适应（见 §4），主样本与 L1 共存于同一 `data/` 目录。
@@ -78,7 +78,7 @@ C:\Users\ASUS\.conda\envs\xjtushm\python.exe -m http.server 8080
 cd d:\lixiang
 set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
 
-%PY% main\export_dashboard.py               # 主样本 6 组
+%PY% main\export_dashboard.py               # 主样本 5 组
 %PY% main\export_dashboard.py 016 017       # 指定组
 %PY% l1\export_dashboard_l1.py              # L1 全部 4 组
 %PY% l1\export_dashboard_l1.py L1-03 L1-05  # 指定组
@@ -91,7 +91,7 @@ set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
 | L1     | `evaluate_l1_degree.run_group(--baseline --strain-evidence --fusion max --params rise=0.05)` | `STEP=5`（1 点 = 10 cycle → **50 cycle/帧**） |
 
 导出的指标与正式结果一致（主样本 016→95.8%、017→87.0%、018→73.8%、
-019→81.3%、020→74.7%、022→96.0%；L1 L1-03→78.7%、L1-04→26.8%、L1-05→79.3%、L1-09→52.5%）。
+019→81.3%、020→74.7%；L1 L1-03→78.7%、L1-04→26.8%、L1-05→79.3%、L1-09→52.5%）。
 
 输出：
 
@@ -110,7 +110,7 @@ dashboard/data/
 ```js
 window.SHM_DATA["016"] = {
   gid, n, nfr, step, dt, dur,      // 点数 / 帧数 / 降采样步长 / 帧间隔 / 试验时长
-  foCols: ["s1",...,"s5"],         // 光纤通道 (022 为空 → 面板显示"未接入")
+  foCols: ["s1",...,"s5"],         // 光纤通道 (无接入时面板显示"未接入")
   meta: { D_end, t25, t55, t85, b2, b3, aeEvents, nFo },
   warn: [ {f, t, lv}, ... ],       // 分级升级事件
   // 波形数组(长度均 = nfr)
@@ -176,7 +176,7 @@ dashboard/
 │   └── dashboard.js        # 播放引擎 / Canvas 图表 / 报警逻辑 / 数据集自适应
 └── data/                   # 由两个导出器共同生成
     ├── index.js            # 主样本清单 (window.SHM_INDEX)
-    ├── 016.js ... 022.js   # 主样本数据包
+    ├── 016.js ... 020.js   # 主样本数据包
     ├── index_l1.js         # L1 清单 (window.SHM_DATASETS['l1'])
     └── L1-03.js ... L1-09.js
 ```
@@ -196,6 +196,8 @@ dashboard/
 - **L1**：损伤度由 `l1/evaluate_l1_degree.run_group(..., baseline=True, strain_ev=True, fusion='max')`计算，与 `l1/results/l1_degree.csv` **逐帧一致**；`c0`/论文检测点来自
   `l1/evaluate_l1_degree.shakedown_cycle` 与 `l1_meta`。
 - 阈值统一 0.25 / 0.55 / 0.85；看板**不重新训练、不引入未来信息**，仅做可视化呈现。
+- **三级语义**：0.25 = 检测损伤起始；0.55 = 损伤不可逆确认；0.85 = 已无剩余裕度。
+  三级**不承诺触发间隔**（受证据预算限制，见总纲 `README.md` §3.1）。
 - **回放速率**：主样本 = `speed / frameDt`（`frameDt=0.5 s`，120× → 240 帧/s）；
   L1 无实时概念，改按**全长归一**（`4800/nfr`，120× 时全程 ≈ 40 s）。
 - **DFOS 空间去尖峰（掉点修复）**：**全分辨率**逐块做「与局部中位(9 点窗)偏差 >
