@@ -13,7 +13,8 @@ T7 参数化: 全部可调参数集中在 __init__ kwargs(默认=v6 配置)。
 证据:
   e_dmg    = 块内损伤型事件能量 log EWMA      (损伤型: logE>背景p60+LIFT)
   e_full   = 全能量累积 log 加速度(短/长窗斜率差 EWMA)
-  e_ae     = max(e_dmg, e_full)
+  e_shape  = 无量纲形状/比值列相对校准段基线的尾部抬升(默认 `PeakFactor`, 见 SHAPE_DEFAULTS)
+  e_ae     = max(e_dmg, e_full[, e_shape])
   e_strain = estrain_w × 应变 std 相对滚动低分位发散
   e_fo     = fo_w × 光纤多通道"去共模空间极差"相对运行中位发散
   risk     = max(启用源的证据)   —— 源由 sources 掩码逐组声明
@@ -25,6 +26,15 @@ T7 参数化: 全部可调参数集中在 __init__ kwargs(默认=v6 配置)。
 """
 import numpy as np
 from .config import EXT_BLOCK_PTS
+
+# --- 形状/比值证据的默认配置(v9.1, 2026-09-20 起为项目默认口径) ---
+# 默认列 = `PeakFactor`(Peak/RMS): 逐列对照(9 组)中唯一同时做到
+#   ① 救活 025(D_end 0.202→0.823, 预警从「无」→ 68.0% 寿命)
+#   ② 016 零影响、018~020 变动 ≤1.5 个百分点
+#   ③ 主样本 5 组分级仍 5/5 级 A
+#   ④ 026 的 `t85` 保持「未达」
+# 且它是**无量纲**峰值因子 → 免疫跨试件幅值尺度不可比。
+SHAPE_DEFAULTS = {'shape_col': 'PeakFactor', 'shape_q': 95.0, 'shape_w': 0.6}
 
 
 class _AmpChannel:
@@ -102,6 +112,22 @@ class OnlineDamageIndex:
         self.estrain_w = float(p.get('estrain_w', 0.6))
         self.strain_ratio_gain = float(p.get('strain_ratio_gain', 2.0))
         self.estrain_min_blocks = int(p.get('estrain_min_blocks', 20))
+        # --- AE 失效自适应(默认关; 仅当调用方显式开启) ---
+        # 适用场景: 某些试件的 AE 信号"整体高位且平稳"，不存在显著超背景的突发事件
+        # → e_ae 恒 ≈ 0。此时应变辅证(权重上限 estrain_w)成为唯一可用证据，
+        #   D 被锁在 estrain_w 以下（如 L1-56 停在 0.58），无法表达更高损伤等级。
+        # 机制: 维护最近 ae_dead_win 个块(已结算)的 e_ae 历史；若该窗口内最大值仍
+        #   < ae_dead_thr，则判定 AE 源无信息，将应变权重提升至 estrain_w_hi。
+        # 纯因果: 只用已结算块的信息, 零未来信息; 窗口按**块数**而非寿命比例,
+        #   故短寿命试件(总块数 < 窗口)永不触发, 行为与原先完全一致。
+        self.ae_auto = bool(p.get('ae_auto', False))
+        self.ae_dead_win = int(p.get('ae_dead_win', 20))
+        self.ae_dead_thr = float(p.get('ae_dead_thr', 0.1))
+        self.estrain_w_hi = float(p.get('estrain_w_hi', 1.0))
+        # --- 块长(点) = 证据结算粒度, 固定 EXT_BLOCK_PTS ---
+        # 注: 曾引入可调 blk_pts(按寿命比例缩放)以对齐 L1 的 n_f 跨度,
+        #     实测无效且使预警更早(块越细, 越界判据的 max 统计量抽样越密)
+        #     → 已回退; 块长不是 D 过早临危的原因。
         # --- 源掩码融合 ---
         # 声发射为主源(ae, 每组必做); 应变(strain)与光纤(fo)为辅助源, 逐组按数据有无声明。
         # 默认 ('ae','strain') == 既有行为(fo 未引入前的口径), 保证历史结果可复现。
@@ -141,12 +167,34 @@ class OnlineDamageIndex:
         self.levels = [0.25, 0.55, 0.85]
         # --- T8 消融模式 ---
         # full        完整 v6: e_ae=max(e_dmg,e_full); risk=max(e_ae,e_strain); 升快降慢
-        # no_dmg      去损伤型事件分类(e_ae=e_full)
-        # no_full     去全能量加速(e_ae=e_dmg)
+        # no_dmg      去损伤型事件分类(e_ae=max(e_full, e_shape))
+        # no_full     去全能量加速(e_ae=max(e_dmg, e_shape))
         # no_strain   去应变证据(risk=e_ae)
         # only_strain 仅应变证据(risk=e_strain)
         # no_accum    去单调累积(D=risk, 无记忆)
         self.abl = str(p.get('abl', 'full'))
+        # --- v9: 形状/比值证据 e_shape (可选, 默认关) ---
+        # 动机: 25 个 AE 列以往只用 Peak。逐列证据筛查(2026-09-20)显示：
+        #   **无量纲比值**列 (MarginFactor=Peak/RootMAV, PeakFactor=Peak/RMS,
+        #   ImpulseFactor=Peak/MAV) 在 **9/9 组**上趋势为正，且在 Peak 失效的
+        #   025/026 上仍有 1.7~3.1 倍尾部抬升；而原始量级列(RMS/MeanSquare…)趋势反向、
+        #   频域 6 列无一致趋势。比值列天然免疫"幅值类跨试件尺度不可比"。
+        # 逐列端到端对照(6 列 × 9 组, q95 w0.6)选出 PeakFactor 为默认，见 SHAPE_DEFAULTS。
+        # 构造(纯因果, 与 stiff_loss 同一习惯):
+        #   块内事件特征取 p_shape_q 分位 → 用**固定校准段** [shape_cal_lo, shape_cal_hi)
+        #   块值的 shape_base_pct 分位作基线 → e_shape = clip((cur/base-1)/shape_gain, 0, 1)
+        # shape_col=None → 完全关闭(恢复到 v6「只用 Peak」口径)，行为与历史逐位一致。
+        # shape_col=None → 完全关闭，行为与历史**逐位一致**。
+        # shape_w 默认 0.6 = 与 estrain_w 同一"辅助证据"权重约定(NOT 调参):
+        #   实测 w=1.0 时 e_shape 单独即可把 risk 顶到 1.0, 9 组 D_end 全部饱和到
+        #   ~1.0 → 跨试件区分度归零; w=0.6 时 025 D_end 0.202→0.824 而其余组不变。
+        self.shape_col = p.get('shape_col', SHAPE_DEFAULTS['shape_col'])
+        self.shape_q = float(p.get('shape_q', SHAPE_DEFAULTS['shape_q']))
+        self.shape_gain = float(p.get('shape_gain', 2.0))
+        self.shape_cal_lo = int(p.get('shape_cal_lo', 20))
+        self.shape_cal_hi = int(p.get('shape_cal_hi', 45))
+        self.shape_base_pct = float(p.get('shape_base_pct', 30))
+        self.shape_w = float(p.get('shape_w', SHAPE_DEFAULTS['shape_w']))
         # --- v7 结构: 磨合/加载抑制窗(点) ---
         # 前 suppress_pts 点内证据照常学习(基线/背景), 但 risk 不累积进 D(排除加载/磨合瞬态)。
         # 在线无总长时传固定点; 离线评估可传 n*frac。
@@ -204,6 +252,11 @@ class OnlineDamageIndex:
         self._has_st_this = False
         self._latched = False
         self._d_hist = []
+        self._ae_hist = []                 # 自适应用的 e_ae 滚动窗口
+        self._estrain_w = self.estrain_w   # 实际生效的应变权重(可变)
+        self._block_shape = []             # 本块事件的特征值(e_shape 用)
+        self._shape_hist = []              # 逐块的 p_q(特征) 历史
+        self._last_e_shape = 0.0
 
     def _on_event(self, peak):
         peak = max(float(peak), 0.0)
@@ -241,13 +294,41 @@ class OnlineDamageIndex:
             ss = (logs[-1] - logs[-4]) / 3.0
             self._accel_ewma = 0.6 * self._accel_ewma + 0.4 * (ss - sl)
             e_full = float(min(max(self._accel_ewma / self.acc_scale, 0.0), 1.0))
+        # --- e_shape (无量纲形状/比值证据, 可选; 默认关) ---
+        e_shape = 0.0
+        if self.shape_col is not None:
+            q = float(np.percentile(self._block_shape, self.shape_q)) \
+                if len(self._block_shape) >= 3 else np.nan
+            self._block_shape = []
+            if np.isfinite(q):
+                self._shape_hist.append(q)
+                if len(self._shape_hist) > 200:
+                    self._shape_hist.pop(0)
+            slo, shi = int(self.shape_cal_lo), int(self.shape_cal_hi)
+            if np.isfinite(q) and self._bcount > shi and len(self._shape_hist) > shi:
+                w = np.asarray(self._shape_hist[slo:shi], dtype=float)
+                w = w[np.isfinite(w)]
+                if len(w) >= 5:
+                    sb = float(np.percentile(w, self.shape_base_pct))
+                    if abs(sb) > 1e-12:
+                        e_shape = float(min(max(
+                            (q / sb - 1.0) / max(self.shape_gain, 1e-9),
+                            0.0), 1.0)) * self.shape_w
+        self._last_e_shape = e_shape
         # --- 按消融模式组合 e_ae ---
+        # 语义: 每个消融模式**只**去掉它名字对应的那一条证据, 保留其余 AE 证据。
+        # ⚠️ 2026-09-20 修正: e_shape 升为默认后, 旧写法(no_dmg=e_full, no_full=e_dmg)
+        #    会**连带丢掉 e_shape**, 导致消融表把形状证据的贡献错记到 e_full 名下。
         if self.abl == 'no_dmg':
-            self._last_e_ae = e_full
+            self._last_e_ae = max(e_full, e_shape)
         elif self.abl == 'no_full':
-            self._last_e_ae = e_dmg
-        else:
+            self._last_e_ae = max(e_dmg, e_shape)
+        elif self.abl == 'only_shape':
+            self._last_e_ae = e_shape
+        elif self.abl == 'no_shape':
             self._last_e_ae = max(e_dmg, e_full)
+        else:
+            self._last_e_ae = max(e_dmg, e_full, e_shape)
         # --- 刚度损失率(因果, 载荷控制不变量) ---
         # 幅值 = 本块 std(未解调通道) 或 |本块均值|(已解调通道), 由 _AmpChannel 自动判定。
         # 基线 = 固定校准段 [stiff_cal_lo, stiff_cal_hi) 块幅值的低分位(≈初始健康刚度)。
@@ -266,6 +347,16 @@ class OnlineDamageIndex:
                 if sbm > 1e-9:
                     stiff = float(max(0.0, amp_st / sbm - 1.0))
         self.stiff_loss = stiff
+        # --- AE 失效自适应: 窗口内 e_ae 全低于阈值 → 应变升为主证(纯因果) ---
+        if self.ae_auto:
+            self._ae_hist.append(self._last_e_ae)
+            if len(self._ae_hist) > self.ae_dead_win:
+                self._ae_hist.pop(0)
+            if len(self._ae_hist) >= self.ae_dead_win \
+               and max(self._ae_hist) < self.ae_dead_thr:
+                self._estrain_w = self.estrain_w_hi
+            else:
+                self._estrain_w = self.estrain_w
         # e_strain (降权): 按 strain_mode 选择构造
         e_strain = 0.0
         self._has_st_this = bool(self._strain_vals)
@@ -275,13 +366,13 @@ class OnlineDamageIndex:
             if len(self._strain_stds) > 120:
                 self._strain_stds.pop(0)
         if self.strain_mode == 'stiff':
-            e_strain = float(min(stiff / max(self.strain_ratio_gain, 1e-9), 1.0)) * self.estrain_w
+            e_strain = float(min(stiff / max(self.strain_ratio_gain, 1e-9), 1.0)) * self._estrain_w
         elif len(self._strain_stds) >= self.estrain_min_blocks:
             sbase = float(np.percentile(self._strain_stds, 50))
             if sbase > 1e-9:
                 ratio = self._strain_stds[-1] / sbase
                 e_strain = float(min(max((ratio - 1.0) / self.strain_ratio_gain, 0.0), 1.0))
-                e_strain *= self.estrain_w
+                e_strain *= self._estrain_w
         self._last_e_strain = e_strain
         # --- e_fo (光纤多通道局部化, 辅助源) ---
         # 各通道“循环幅值”(std/|mean| 自动判定) 相对自身校准段基线的增长;
@@ -402,14 +493,42 @@ class OnlineDamageIndex:
             lv = 1
         self.level = lv
 
-    def update(self, strain, ae_peak=None, fo=None):
-        """逐点推进。fo = {通道名: 值} (光纤, 可选; 缺省或全 NaN 时该块无光纤证据)。"""
+    def shape_value(self, ae_dict):
+        """按 shape_col 从事件字典取形状/比值特征值; 未启用或缺值→None。
+
+        供调用方一行接入: di.update(strain, peak, fo, di.shape_value(p['ae']))
+        shape_col=None 时恒返回 None → update 行为与历史逐位一致。
+        """
+        if self.shape_col is None or not ae_dict:
+            return None
+        v = ae_dict.get('ae_' + self.shape_col, None)
+        if v is None:
+            return None
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if np.isfinite(v) else None
+
+    def update(self, strain, ae_peak=None, fo=None, ae_shape=None):
+        """逐点推进。fo = {通道名: 值} (光纤, 可选; 缺省或全 NaN 时该块无光纤证据)。
+
+        ae_shape: 可选的无量纲形状/比值特征值(与 ae_peak 同事件同刻传入)。
+                  shape_col=None 时忽略，行为与历史逐位一致。
+        """
         self._bpts += 1
         self._seen_pts += 1
         if ae_peak is not None:
             peak = max(float(ae_peak), 0.0)
             self._block_all += peak ** 2
             self._on_event(peak)
+        if self.shape_col is not None and ae_shape is not None:
+            try:
+                sv = float(ae_shape)
+            except (TypeError, ValueError):
+                sv = np.nan
+            if np.isfinite(sv):
+                self._block_shape.append(sv)
         if strain is not None and not np.isnan(strain):
             self._strain_vals.append(strain)
             self._amp_st.add(strain)

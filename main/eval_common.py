@@ -21,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 项目根(含 shm)
 os.chdir(os.path.dirname(os.path.abspath(__file__)))                            # main/
 from shm.streaming import StreamSimulator
-from shm.damage_index import OnlineDamageIndex
+from shm.damage_index import OnlineDamageIndex, SHAPE_DEFAULTS
 
 GROUPS = ['016', '017', '018', '019', '020']   # 主样本 5 组
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -58,9 +58,20 @@ def ref_map():
 
 
 def cfg_id(params):
-    """参数 dict -> 可读指纹(缓存目录名)。"""
+    """参数 dict -> 可读指纹(缓存目录名)。
+
+    注: 形状证据(e_shape)的参数不属 PARS, 但会改变 D → 一并并入指纹,
+    否则不同 shape 配置会命中同一缓存目录而取到错误的 D。
+    未显式指定时用 `SHAPE_DEFAULTS`(项目默认口径) → 默认指纹已随
+    PeakFactor 升为默认而改变，旧缓存不会被误用。
+    """
     p = {k: params.get(k, DEFAULT[k]) for k in PARS}
     tag = '_'.join(f'{k}{p[k]:g}' for k in PARS)
+    sc = params.get('shape_col', SHAPE_DEFAULTS['shape_col'])
+    if sc:
+        tag += '_sh{0}q{1:g}w{2:g}'.format(
+            sc, float(params.get('shape_q', SHAPE_DEFAULTS['shape_q'])),
+            float(params.get('shape_w', SHAPE_DEFAULTS['shape_w'])))
     h = hashlib.md5(tag.encode()).hexdigest()[:6]
     return f'{tag}_{h}'
 
@@ -83,7 +94,8 @@ def run_one(args):
         pk = None
         if p.get('ae_new') and p.get('ae'):
             pk = p['ae'].get('ae_Peak', 0.0) or 0.0
-        dlist.append(di.update(strain, float(pk) if pk is not None else None))
+        dlist.append(di.update(strain, float(pk) if pk is not None else None,
+                               None, di.shape_value(p.get('ae'))))
     sim.cleanup()
     d = np.array(dlist, dtype=np.float32)
     np.save(dpath, d)

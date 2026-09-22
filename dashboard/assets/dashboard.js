@@ -44,9 +44,20 @@
     'barAE', 'barST', 'barRK', 'valAE', 'valST', 'valRK',
     'vAE', 'vFO', 'vST', 'vEV', 'logList', 'logCount', 'hAEn', 'hFOn', 'hSTn', 'hDIn',
     'hFOc', 'hFOs', 'chanBody', 'equipRig', 'equipMode', 'tAE', 'tFO', 'tST', 'boot', 'bootText',
+    'tDmg', 'tTrend', 'dUnit', 'lgD', 'dMarginLbl',
     'dfosRow', 'tDF', 'vDF', 'cvDFHeat', 'cvDFProf',
     'cvTrend', 'cvAE', 'cvFO', 'cvST', 'cvEV', 'lgB2', 'lgB3', 'lgC0', 'lgRef'
   ].forEach(function (k) { el[k] = $(k); });
+
+  /* 主指标相关文案的**初始默认值** —— 数据包未提供覆盖字段时必须还原，
+     否则从一个数据集切到另一个会残留上一个的名称（如 L1 的“离线复评”）。 */
+  var DEF_LB = {
+    tDmg: el.tDmg ? el.tDmg.textContent : '',
+    tTrend: el.tTrend ? el.tTrend.textContent : '',
+    dUnit: el.dUnit ? el.dUnit.textContent : '',
+    lgD: el.lgD ? el.lgD.textContent : '',
+    dMarginLbl: el.dMarginLbl ? el.dMarginLbl.textContent : ''
+  };
 
   /* ============================================================
    *  一、绘图工具
@@ -226,6 +237,7 @@
     if (c.gid !== d.gid) {
       c.gid = d.gid;
       c.D = dec(d.D, 1000); c.risk = dec(d.risk, 1000);
+      c.hiF = (d.hiF && d.hiF.length) ? dec(d.hiF, 1000) : null;
       c.eae = dec(d.eae, 1000); c.est = dec(d.est, 1000);
       c.st = dec(d.st, 100);
       c.ael = dec(d.ael, 1000);
@@ -380,8 +392,22 @@
     // 仅绘制"当前时刻及之前"的数据 (在线实时语义: 不预显未来曲线)
     if (f > 1) {
       plotFill(ctx, b, c.D, 0, f + 1, 0, 1, C_D);
+      if (c.hiF) {
+        plotLine(ctx, b, c.hiF, 0, f + 1, 0, 1, 'rgba(150,170,190,.95)', { width: 1.3 });
+      }
       plotLine(ctx, b, c.risk, 0, f + 1, 0, 1, 'rgba(255,138,31,.85)', { width: 1.2 });
       plotLine(ctx, b, c.D, 0, f + 1, 0, 1, C_D, { width: 2, glow: 8 });
+    }
+    // 论文 HI_F 参考曲线：图例 + 与 D 的提前量标注（仅 L1 数据集有此字段）
+    var lgHI = document.getElementById('lgHI');
+    if (lgHI) {
+      lgHI.style.display = c.hiF ? '' : 'none';
+      var lgHIt = document.getElementById('lgHIt');
+      if (lgHIt && c.hiF) {
+        var lp = (d.meta && d.meta.hiLeadPt != null) ? d.meta.hiLeadPt : null;
+        lgHIt.textContent = '论文 HI_F 参考（离线）' +
+          (lp != null ? ' · D 早 ' + Number(lp).toFixed(1) + ' 个百分点' : '');
+      }
     }
     // 光标
     var cx = xOf(f);
@@ -809,7 +835,10 @@
     if (S.chanCells) {
       setChan('ae', fmtNum(aeN) + ' 事件');
       setChan('fo', nCh ? fmtNum(rawPts) + ' 点 × ' + nCh + ' 通道' : '—');
-      setChan('dfos', fmtNum(Math.max(1, Math.floor(rawPts / 5000))) + ' 块空间分布');
+      setChan('dfos', d.dfos
+        ? fmtNum(Math.min(d.dfos.nblk, (d.dfos.blkOf[f] || 0) + 1)) + ' / ' +
+          fmtNum(d.dfos.nblk) + ' 块'
+        : '—');
       setChan('engine', fmtNum(Math.floor(rawPts / 500)) + ' 块结算');
       setChanState('fo', !!nCh);
     } else {
@@ -996,6 +1025,14 @@
       el.tTotal.textContent = '/ ' + fmtT(d.dur);
       if (el.equipRig && d.rig) el.equipRig.textContent = d.rig;
       if (el.equipMode && d.mode) el.equipMode.textContent = d.mode;
+      // 主指标名称可由数据包覆盖（L1 第二批 = 「离线复评 HI_AE」，非“损伤度 D(t)”）；
+      // 未提供时必须**还原默认**，否则跨数据集切换会残留上一个的名称。
+      var LB = d.labels || {};
+      if (el.tDmg) el.tDmg.textContent = d.indexName || DEF_LB.tDmg;
+      if (el.tTrend) el.tTrend.textContent = d.trendName || DEF_LB.tTrend;
+      if (el.dUnit) el.dUnit.textContent = LB.unit || DEF_LB.dUnit;
+      if (el.lgD) el.lgD.textContent = LB.legend || DEF_LB.lgD;
+      if (el.dMarginLbl) el.dMarginLbl.textContent = LB.margin || DEF_LB.dMarginLbl;
       buildChanTable(d);
       var TT = isCycle()
         ? { ae: '声发射 · 事件率 / 峰值', fo: '光纤光栅 · 多通道', st: '分布式应变 · 块均值 / 局部峰' }
@@ -1081,7 +1118,7 @@
     }
     // 主样本清单向后兼容: export_dashboard.py 写的是 window.SHM_INDEX
     if (window.SHM_INDEX && window.SHM_INDEX.length && !seen.main) {
-      dss.unshift({ id: 'main', name: '疲劳机主样本 016-020', unit: 's', path: 'data/',
+      dss.unshift({ id: 'main', name: '疲劳机主样本 016-020 / 022-027', unit: 's', path: 'data/',
         groups: window.SHM_INDEX });
     }
     return dss;
@@ -1092,7 +1129,8 @@
     ds.groups.forEach(function (g) {
       var o = document.createElement('option');
       o.value = g.gid;
-      o.textContent = '试件 ' + g.gid;
+      var extra = (g.spec && g.spec.kind) ? ' · ' + g.spec.kind : '';
+      o.textContent = '试件 ' + g.gid + extra;
       el.gidSel.appendChild(o);
     });
   }

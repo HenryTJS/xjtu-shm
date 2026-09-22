@@ -44,6 +44,7 @@ os.chdir(ROOT)
 
 import evaluate_l1_degree as _deg                          # noqa: E402
 import evaluate_l1_dfos as _dfos                           # noqa: E402
+import reproduce_broer_l1 as _l4                           # noqa: E402
 
 GAP_S = 300.0                 # FBG 测量块间隔阈值(s)
 MIN_ROWS = 500                # 一个有效块的最少采样行
@@ -193,6 +194,30 @@ def to_block_frames(arr, cyc_frame):
 # ------------------------------------------------------------------
 # 打包一组
 # ------------------------------------------------------------------
+# 每块(EXT_BLOCK_PTS=500 点) 对应的帧数 = 500 / STEP
+BLK_FRAMES = 500 // STEP
+
+
+def de_step(arr, blk=BLK_FRAMES):
+    """块级阶跃 → 块内线性插值（消除 D(t)/risk 的阶梯观感）。
+
+    OnlineDamageIndex 每 EXT_BLOCK_PTS=500 点才结算一次块级统计, 故 D/risk/e_ae/e_st
+    在时间轴上呈"每块一个平台"的阶梯。此处把每块内部线性铺开, 使曲线连续:
+      - 块末值保持不变（只把"块末那次跳变"摊回整块内）;
+      - 阈值跨越时刻最多提前不到一个块。
+    仅用于展示; 分级 lv 由插值后的 D 重算, 保持内部一致。
+    """
+    a = np.asarray(arr, dtype=float)
+    n = len(a)
+    if n <= blk:
+        return a
+    out = a.copy()
+    for s in range(blk, n, blk):
+        e = min(s + blk, n)
+        out[s:e] = np.linspace(a[s - 1], a[s], e - s + 1)[1:]
+    return out
+
+
 def pack(gid):
     print(f'\n=== 导出 {gid} ===')
     nf = _deg.META[gid]['n_f']
@@ -246,9 +271,28 @@ def pack(gid):
         idx = np.where(D >= th)[0]
         return round(float(cyc[idx[0]]) / nf * 100.0, 1) if len(idx) else None
 
+    # --- 论文 HI_F（离线参考曲线；方案A：与在线 D(t) **并列**展示，不替换）---
+    # HI_F = 0.5·HI_AE + 0.5·HI_OF（Broer 2021 式 7，两项各 unity01 归一化到 [0,1]）。
+    # ⚠️ 归一化需全寿命最大值 ⇒ **非因果/离线**，仅作参考基线。
+    # 叠加的意义：既保留在线因果 D(t) 作为主指标，又把「与论文口径的差异」量化且可见。
+    hiF_f, hi85_pct = None, None
+    try:
+        r4 = _l4.level4(gid)
+        c4 = np.asarray(r4['cyc'], float)
+        h4 = np.asarray(r4['HI_F'], float)
+        o = np.argsort(c4)
+        hiF_f = np.interp(cyc_f, c4[o], h4[o])
+        ix = np.where(hiF_f >= 0.85)[0]
+        hi85_pct = round(float(cyc_f[ix[0]]) / nf * 100.0, 1) if len(ix) else None
+    except Exception as e:                       # noqa: BLE001
+        print(f'  [warn] {gid} HI_F 参考曲线不可用: {e}')
+    d85_pct = first_ge_pct(0.85)
+    hi_lead = (round(hi85_pct - d85_pct, 1)      # 正 = D(t) 早于论文 HI_F
+               if (d85_pct is not None and hi85_pct is not None) else None)
+
     meta = {
         'D_end': round(float(D[-1]), 3),
-        't25': first_ge_pct(0.25), 't55': first_ge_pct(0.55), 't85': first_ge_pct(0.85),
+        't25': first_ge_pct(0.25), 't55': first_ge_pct(0.55), 't85': d85_pct,
         'b2': None,                                  # L1 无弱标签 b2(前端自动隐藏)
         'b3': 100.0,                                 # 失效锚 = n_f
         'c0Pct': round(float(r['c0']) / nf * 100.0, 1) if r['c0'] > 0 else None,
@@ -257,7 +301,17 @@ def pack(gid):
         'aeEvents': int(aen.sum()),
         'nFo': len(fo_cols),
         'nDfos': n_pos,
+        # --- 论文 HI_F 离线参考（方案A）---
+        'hiF85': hi85_pct,        # HI_F 达 0.85 的寿命% (None = 未达)
+        'hiLeadPt': hi_lead,      # D 相对 HI_F 的提前量(百分点, 正 = D 更早)
     }
+
+    # --- 块级阶跃 → 块内线性插值(展示连续化; 块级口径不变) ---
+    D_f = de_step(D_f)
+    risk_f = de_step(risk_f)
+    eae_f = de_step(eae_f)
+    est_f = de_step(est_f)
+    lv_f = levels_from(D_f)
 
     # --- 分级升级事件(逐帧, 在线语义) ---
     warn = []
@@ -297,6 +351,7 @@ def pack(gid):
         'meta': meta, 'warn': warn,
         # --- 波形数组(长度均 = nfr) ---
         'D': [_i1000(x) for x in D_f],
+        'hiF': ([_i1000(x) for x in hiF_f] if hiF_f is not None else None),
         'risk': [_i1000(x) for x in risk_f],
         'eae': [_i1000(x) for x in eae_f],
         'est': [_i1000(x) for x in est_f],

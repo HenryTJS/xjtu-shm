@@ -46,7 +46,8 @@ def _stream_d(gid, di):
         pk = None
         if p.get('ae_new') and p.get('ae'):
             pk = p['ae'].get('ae_Peak', 0.0) or 0.0
-        dlist.append(di.update(strain, float(pk) if pk is not None else None))
+        dlist.append(di.update(strain, float(pk) if pk is not None else None,
+                               None, di.shape_value(p.get('ae'))))
     sim.cleanup()
     return np.array(dlist, dtype=np.float32)
 

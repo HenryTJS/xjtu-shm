@@ -1,13 +1,14 @@
 # 疲劳机多源在线损伤度 D(t) 监测看板
 
-工业化风格的实时监测看板，用于回放**两类数据集**的**在线因果流式**损伤评估过程，逐点复现 D(t) 演化、多源信号、分级预警与报警日志。
+工业化风格的实时监测看板，用于回放**三类数据集**的**在线因果流式**损伤评估过程，逐点复现 D(t) 演化、多源信号、分级预警与报警日志。
 
 | 数据集                                | 试件                    | 时间基                            | 数据源 / 参考锚                                                    |
 | ------------------------------------- | ----------------------- | --------------------------------- | ------------------------------------------------------------------ |
-| **主样本**（疲劳机）            | 016-020                 | 秒（`frameDt=0.5`）             | AE 25 通道 + 应变 1 通道；锚 =`b2`/`b3`                        |
+| **主样本**（疲劳机）            | **016-020 + 022-027**（11 组） | 秒（`frameDt=0.5`）             | AE 25 通道 + 应变 1 通道；016-020 有 `b2`/`b3`，022-027 **无标签** |
 | **公开集 L1**（ReMAP/TU-Delft） | L1-03/04/05/09          | **cycle**（`frameDt=50`） | FBG 10 通道 +**DFOS**；锚 = `c0` + 论文检测点（无 `b2`） |
+| **公开集 L1 二批**（无 FBG） | L1-49/50/51/52/54/55/56/59/60 | **cycle**（`frameDt=50`） | AE（1 s bin）+ **DFOS 段级**；锚 = `b3`（无 `b2`/论文点） |
 
-顶栏数据集下拉可自由切换；前端按数据包自带字段自适应（见 §4），主样本与 L1 共存于同一 `data/` 目录。
+顶栏数据集下拉可自由切换；前端按数据包自带字段自适应（见 §4），三类数据集共存于同一 `data/` 目录。
 
 ---
 
@@ -38,7 +39,7 @@ C:\Users\ASUS\.conda\envs\xjtushm\python.exe -m http.server 8080
 | **顶栏**         | **数据集选择**（主样本 / L1）、试件选择、台架信息（随数据集变）、系统状态灯、时钟                                                                                 |
 | **控制条**       | `开始监测 / 暂停监测`、`复位`、`声音开/关`、回放倍率、试验进程进度条、采样点/AE 事件/数据帧读数                                                                   |
 | **损伤度仪表**   | 实时 D 值、分级色环、三档阈值刻度、峰值 D、寿命进度、剩余裕度                                                                                                           |
-| **D(t) 趋势**    | D 曲线 + risk 曲线、0.25/0.55/0.85 阈值带、b2/b3 锚、实时游标与跟随读数                                                                                                 |
+| **D(t) 趋势**    | D 曲线 + risk 曲线、0.25/0.55/0.85 阈值带、b2/b3 锚、**论文 HI_F 灰色参考线**（仅 L1 第一批）、实时游标与跟随读数                                                             |
 | **分级预警**     | 三级指示灯（注意/预警/临危）、各级触发时刻、综合判定文案、证据条（e_ae / e_st / risk）                                                                                  |
 | **多源子面板**   | ① AE：事件率柱 + 峰值能量(log) ② FBG：多通道实时曲线 ③ 应变：波形 + 滑动波动 σ（L1 换为**FBG 块均值 + DFOS 局部峰**） ④ 证据层分解                           |
 | **空间分布面板** | **仅 L1**：左 = 相对基线偏离**热图**（x=位置 mm, y=循环数，随回放自上而下生长）；右 = 当前块**空间分布曲线** vs 基线(块 0) + 偏离填充。主样本自动隐藏 |
@@ -78,20 +79,37 @@ C:\Users\ASUS\.conda\envs\xjtushm\python.exe -m http.server 8080
 cd d:\lixiang
 set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
 
-%PY% main\export_dashboard.py               # 主样本 5 组
-%PY% main\export_dashboard.py 016 017       # 指定组
-%PY% l1\export_dashboard_l1.py              # L1 全部 4 组
+%PY% main\export_dashboard.py               # 默认导出 11 组 (016-020 + 022-027)
+%PY% main\export_dashboard.py 016 017       # 指定组（注意: PowerShell 会吃掉前导零，
+                                            #   脚本内已 zfill(3) 兜底）
+%PY% l1\export_dashboard_l1.py              # L1 第一批 4 组
 %PY% l1\export_dashboard_l1.py L1-03 L1-05  # 指定组
 %PY% l1\export_dashboard_l1.py --out <dir>  # 自定义输出目录
+%PY% l1\export_dashboard_l1_v2.py              # L1 第二批 9 组（无 FBG）
+%PY% l1\export_dashboard_l1_v2.py L1-49 L1-55  # 指定组
+%PY% l1\export_dashboard_l1_v2.py --out <dir>  # 自定义输出目录
 ```
 
 | 数据集 | 流程                                                                                           | 降采样                                                 |
 | ------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| 主样本 | `StreamSimulator` 逐点推送 → `OnlineDamageIndex`                                          | `STEP=5`（10 Hz → 2 Hz 帧，`frameDt=0.5 s`）      |
+| 主样本 | `StreamSimulator` 逐点推送 → `OnlineDamageIndex`（默认口径 = 含 `PeakFactor` 形状证据） | `STEP=5`（10 Hz → 2 Hz 帧，`frameDt=0.5 s`）      |
 | L1     | `evaluate_l1_degree.run_group(--baseline --strain-evidence --fusion max --params rise=0.05)` | `STEP=5`（1 点 = 10 cycle → **50 cycle/帧**） |
 
-导出的指标与正式结果一致（主样本 016→95.8%、017→87.0%、018→73.8%、
-019→81.3%、020→74.7%；L1 L1-03→78.7%、L1-04→26.8%、L1-05→79.3%、L1-09→52.5%）。
+| L1 第二批 | **`evaluate_l1_hi_ae.hi_of_group()` → `HI_AE = unity01(AE 累积事件数)`**（**离线复评**口径，非在线；§12.8） | `STEP=5`（1 点 = 10 cycle → **50 cycle/帧**） |
+
+导出的指标与正式结果**逐组一致**（主样本 016→95.8%、017→87.0%、018→**72.4%**、019→**80.0%**、020→**73.9%**；
+> 数值随 2026-09-20 默认口径变更（`PeakFactor` 形状证据升为默认，§3.6）而更新；
+> 022→96.0%、023→24.2%、024→72.5%、025→（未达 0.85，D_end 0.82）、026/027→未达；
+L1 第一批 L1-03→78.7%、L1-04→**60.7%**、L1-05→79.3%、L1-09→52.5%；
+L1 第二批**改用离线复评 HI_AE，其 t85（达 0.85 的寿命百分比）**：
+L1-49→82.9%、L1-50→97.9%、L1-51→68.5%、L1-52→95.8%、L1-54→88.4%、
+L1-55→87.1%、L1-56→92.1%、L1-59→98.7%、L1-60→93.3%，均与 `l1/results/l1_hi_ae.csv` 相同）。
+
+> ⚠️ **L1 第二批展示的是「离线复评」口径（非在线）。**
+> `HI_AE = unity01(AE 累积事件数)` 需**全寿命最大值**才能归一 → **非因果**。
+> L1 第二批经四条独立路径检验后确认**不支持在线预警**（结论与依据不在此展开），
+> 故看板保留逐帧回放仅供观察趋势，界面已在数据集名 / 设备模式 / 通道表 / 主卡片标题
+> 四处标注「离线复评（非在线）」，仪表盘单位改为 `HI_AE (0~1)`、余量标签改为 `1 − HI_AE`。
 
 输出：
 
@@ -99,8 +117,10 @@ set PY=C:\Users\ASUS\.conda\envs\xjtushm\python.exe
 dashboard/data/
 ├── index.js       # 主样本清单与摘要 (window.SHM_INDEX)          ← export_dashboard.py
 ├── 016.js ...     # 主样本每组数据包 (window.SHM_DATA[gid])
-├── index_l1.js    # L1 清单 (window.SHM_DATASETS['l1'])          ← export_dashboard_l1.py
-└── L1-03.js ...   # L1 每组数据包 (window.SHM_DATA[gid])
+├── index_l1.js    # L1 第一批清单 (window.SHM_DATASETS['l1'])    ← export_dashboard_l1.py
+├── L1-03.js ...   # L1 第一批数据包 (window.SHM_DATA[gid])
+├── index_l1v2.js  # L1 第二批清单 (window.SHM_DATASETS['l1v2'])  ← export_dashboard_l1_v2.py
+└── L1-49.js ...   # L1 第二批数据包 (window.SHM_DATA[gid])
 ```
 
 ---
@@ -144,7 +164,9 @@ window.SHM_DATA["L1-03"] = {
           b3: 100.0,               // 失效锚 = n_f
           c0Pct,                   // ★ 基线重定义终点 c0 的寿命百分比
           refs: [{pct,label}],     // ★ 论文检测点(灰色参考锚)
-          aeEvents, nFo, nDfos },
+          aeEvents, nFo, nDfos,
+          hiF85,                   // ★ 论文 HI_F 达 0.85 的寿命百分比(None = 寿命内未达)
+          hiLeadPt },              // ★ D 相对 HI_F 的提前量(百分点, 正 = D 更早), 见图例文案
   dfos: { local, rmse, hi, nPos,   // ★ DFOS 块级序列(逐帧展开, local/rmse ×100, hi ×1000)
           // --- 空间分布(逐块中位曲线) ---
           nblk, npos,              // 块数 × 空间点数(已降采样至 ~420)
@@ -156,9 +178,34 @@ window.SHM_DATA["L1-03"] = {
           cycPerBlk,               // 5000
           spikeN },                // ★ 被去尖峰修复的采样点数(透明化; 全分辨率计数)
   ax:   { ael:[lo,hi], rate:hi },  // ★ AE 面板纵轴自适应(主样本缺省固定)
+  hiF:  [ ... ],                   // ★ 论文 HI_F 序列 ×1000, 长度 = nfr (无则 null / 缺省)
   // 其余 D/risk/eae/est/lv/st/ael/aen/t/fo 与主样本同编码
 }
 ```
+
+#### 4.1.1 `hiF`：论文 HI_F 离线参考
+
+L1 第一批（L1-03/04/05/09）额外携带论文的 `HI_F` 曲线，作为**灰色参考线**与在线 `D(t)` 同图对照：
+
+| 字段 | 含义 |
+| ---- | ---- |
+| `hiF` | 论文 `HI_F` 逐帧序列（×1000 编码，`unit` = 归一化 0~1） |
+| `meta.hiF85` | `HI_F` 首次达 0.85 的寿命百分比（`null`/缺省 = 寿命内未达） |
+| `meta.hiLeadPt` | `D` 相对 `HI_F` 的**提前量**（百分点，**正值 = `D` 更早**，`= t85(D) − hiF85` 取反后规范化） |
+
+生成方式：导出器调用自己的正式实现 `reproduce_broer_l1.level4(gid)` 复算 `HI_F`，
+再用 `np.interp` 插值到看板的 `cycle` 帧网格（`frameDt = 50`）。
+
+**语义边界（务必按此理解）：**
+
+- `hiF` 是**离线**量（依赖全寿命窗口 `T` 与事后归一化），**不是**在线可比：它与 `c0 基线终点`、
+  `论文检测点`、`b3 断裂锚` 同属参考层；看板不把它当作第二套在线指标。
+- 参考线**只在 L1 第一批出现**；主样本、L1 第二批（`L1-49…L1-60`，无 FBG）无此字段，
+  前端检测到 `hiF` 为空即自动隐藏该图例与曲线（`lgHI.style.display = 'none'`）。
+- 与其它曲线一致，参考线**只绘制当前时刻及之前**的部分，不预显未来（遵循 §2「在线语义」）。
+- 图例文案由 `hiLeadPt` 动态生成，形如
+  `论文 HI_F 参考（离线） · D 早 33.5 个百分点`；四种试件的实测提前量为
+  L1-03 = 6.7、L1-04 = 33.5、L1-05 = 11.4、L1-09 = 42.6 个百分点。
 
 清单：主样本用 `window.SHM_INDEX`（数组）；L1 用
 `window.SHM_DATASETS['l1'] = {id, name, unit, path, groups:[...]}`。
@@ -174,17 +221,20 @@ dashboard/
 ├── assets/
 │   ├── dashboard.css       # 工业化深色主题
 │   └── dashboard.js        # 播放引擎 / Canvas 图表 / 报警逻辑 / 数据集自适应
-└── data/                   # 由两个导出器共同生成
+└── data/                   # 由三个导出器共同生成
     ├── index.js            # 主样本清单 (window.SHM_INDEX)
     ├── 016.js ... 020.js   # 主样本数据包
-    ├── index_l1.js         # L1 清单 (window.SHM_DATASETS['l1'])
-    └── L1-03.js ... L1-09.js
+    ├── index_l1.js         # L1 第一批清单 (window.SHM_DATASETS['l1'])
+    ├── L1-03.js ... L1-09.js
+    ├── index_l1v2.js       # L1 第二批清单 (window.SHM_DATASETS['l1v2'])
+    └── L1-49.js ... L1-60.js
 ```
 
 > 在 N 个试件上扩展：主样本改 `main/export_dashboard.py` 尾部的组参；
-> L1 改 `l1/export_dashboard_l1.py`（组集来自 `l1_meta.load_meta`，新增试件只需放入
-> `l1/L1-xx/` 并带 `L1-xx.pdf`，无需改代码）。
-> 新增一个数据集：只要写一个导出器生成 `window.SHM_DATASETS['<id>']` + 同名清单即可。
+> L1 第一批改 `l1/export_dashboard_l1.py`、第二批改 `l1/export_dashboard_l1_v2.py`
+> （组集来自各自脚本的 `GROUPS`，新增试件放入 `l1/L1-xx/` 即可，无需改代码）。
+> 新增一个数据集：写一个导出器生成 `window.SHM_DATASETS['<id>']` + 同名清单，
+> 并在 `index.html` 里加一行 `<script src="data/index_<id>.js"></script>`。
 
 ---
 
@@ -196,6 +246,9 @@ dashboard/
 - **L1**：损伤度由 `l1/evaluate_l1_degree.run_group(..., baseline=True, strain_ev=True, fusion='max')`计算，与 `l1/results/l1_degree.csv` **逐帧一致**；`c0`/论文检测点来自
   `l1/evaluate_l1_degree.shakedown_cycle` 与 `l1_meta`。
 - 阈值统一 0.25 / 0.55 / 0.85；看板**不重新训练、不引入未来信息**，仅做可视化呈现。
+- **论文 `HI_F` 灰色参考线（仅 L1 第一批）**：由 `l1/reproduce_broer_l1.level4()` 复算，属**离线参考层**，
+  与在线 `D(t)` 口径解耦 —— 它**不参与** `D` / `risk` / `lv` 的任何计算，也不触发预警；
+  提前量 `meta.hiLeadPt` 仅作对照展示（正 = `D` 更早）。字段定义见 §4.1.1。
 - **三级语义**：0.25 = 检测损伤起始；0.55 = 损伤不可逆确认；0.85 = 已无剩余裕度。
   三级**不承诺触发间隔**（受证据预算限制，见总纲 `README.md` §3.1）。
 - **回放速率**：主样本 = `speed / frameDt`（`frameDt=0.5 s`，120× → 240 帧/s）；
@@ -206,4 +259,4 @@ dashboard/
   ⚠️ 顺序要求：**先去尖峰、后补 NaN**（L1-04 矩阵约 9% 位置缺测，先插值会造出假尖峰）。
   修复点数：L1-03 **0** / L1-04 **7** / L1-05 **5** / L1-09 **273**，随包上报（`dfos.spikeN`）。
 - **DFOS 热图色标**：取全寿命 |偏离| 的 **p98** 鲁棒归一（超出饱和），避免少数大偏离压平整幅图。
-- **L1-04 提示**：其 AE 仅覆盖 61.3% 寿命（止于 171.7k / n_f=280k），后段 AE 面板为空属正常。
+- **L1-04 提示**：其 FBG 应变几乎零漂移（−0.2 µε，见总纲 §3.2c）⇒ D(t) 实际由 AE 单源主导，基线终点 `c0` 偏晚（42.8% 寿命）；AE 覆盖 99.9%，各面板均有数据。（其 AE 曾被认为仅覆盖 61.3%，那是 `.pridb` 时间基断裂的伪影 —— 见总纲 §17.11。）

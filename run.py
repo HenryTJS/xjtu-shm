@@ -48,6 +48,7 @@ TASKS = {
         'degree':   [L1_DEGREE],                             # D(t) + 三级预警
         'curves':   [L1_DEGREE],
         'paper':    [['l1/reproduce_broer_l1.py', '--mode', 'all']],  # 论文 Level1 + Level4
+        'paper-l23': [['l1/reproduce_broer_l23.py', '--mode', 'all']],  # 论文 Level2 + Level3
         'dfos':     [['l1/evaluate_l1_dfos.py', '--mode', 'hi']],     # 分布式应变逐块
         'fiber-hi': [['l1/evaluate_l1.py', '--mode', 'hi']],          # 光纤(FBG)块级 HI
         'dashboard': [['l1/export_dashboard_l1.py']],                  # → dashboard/data/
@@ -61,6 +62,7 @@ DESC = {
     'warning':  ('预警 onset/分级', 'evaluate.py warning: A-预警', '（含在 degree 输出的 results/l1_degree.csv）'),
     'curves':   ('D(t) 曲线出图', 'evaluate.py curves: 5 组曲线', 'evaluate_l1_degree.py: 逐组图'),
     'paper':    ('论文图表', 'evaluate.py paper: 四联图+流程图', 'reproduce_broer_l1.py: 论文 Level1/4 复现'),
+    'paper-l23': ('论文 L2/L3 复现', '—', 'reproduce_broer_l23.py: L3a 精确复现; L3b 未复现; AE 支路已接入(PCA2 73-75%)'),
     'dfos':     ('分布式应变分析', '—', 'evaluate_l1_dfos.py: 逐块+热图'),
     'fiber-hi': ('光纤块级 HI', '—', 'evaluate_l1.py: FBG 块级 HI'),
     'robust':   ('稳健性/统计', 'robustness.py: sens/loso/ablation/stats', '— （未做）'),

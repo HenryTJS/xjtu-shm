@@ -418,37 +418,39 @@ def save_ae_to_csv(df_ae, output_path):
 def process_ae_specimen(specimen_name, folder_path):
     """处理单个试件的所有 AE 文件，合并为一个 CSV。
 
-    同一试件可能有多个 .pridb 文件 (如 L1-04.pridb, L1-04-2.pridb)，
-    它们代表同一试件全流程的不同时间段 (可能时间有重叠)，
-    列结构一致，因此合并并按时间戳去重后输出为一个 CSV 文件。
+    ⚠️ **多段 `.pridb` 的会话缝合**：`.pridb` 的 `time` 是**各次采集自己的起算秒数**
+    （采集中断重开会从 ~0 重算），不是墙钟。旧实现 `concat` → `drop_duplicates('time')`
+    → `sort_values('time')` 假设两段"时间有重叠⇒有重复"，但实测 L1-04 两段事件
+    **零重合**（是两段独立会话），去重无效、排序交错 ⇒ AE 只覆盖 cycle 61.3%、
+    且后期高活跃段被错放到 cycle 110k–161k（与论文"前 240k cycles 几乎无 AE"矛盾）。
+    现交由 `ae_io.plan()` 判定「按 Time 合并」还是「按会话顺序缝合」，见
+    `ae_io` 模块 docstring 与 docs/details.md §17.11。
     """
     ae_dir = os.path.join(folder_path, 'AE')
     if not os.path.exists(ae_dir):
         print(f'  [跳过] AE 目录不存在: {ae_dir}')
         return
 
-    pridb_files = sorted([f for f in os.listdir(ae_dir) if f.endswith('.pridb')])
+    import sys as _sys
+    _h = os.path.dirname(os.path.abspath(__file__))
+    if _h not in _sys.path:
+        _sys.path.insert(0, _h)
+    import ae_io
 
-    if not pridb_files:
-        print(f'  [跳过] 无 AE .pridb 文件')
-        return
-
-    # 合并所有文件的 DataFrame
-    frames = []
-    for pridb_file in pridb_files:
-        filepath = os.path.join(ae_dir, pridb_file)
-        df_ae = load_ae_vallenae(filepath)
-
-        if df_ae is not None and len(df_ae) > 0:
-            frames.append(df_ae)
-
-    if not frames:
+    df_all, pl = ae_io.read_hits_vallenae(specimen_name)
+    if df_all is None or len(df_all) == 0:
         print(f'  [跳过] 无有效的 AE 数据')
         return
+    print(f'    mode={pl["mode"]}  hits={len(df_all):,}  '
+          f'time={df_all["time"].min():.1f}~{df_all["time"].max():.1f} s  '
+          f'通道: {sorted(df_all["channel"].unique())}')
 
-    # 合并、按时间排序、去重
-    df_all = pd.concat(frames, ignore_index=True)
-    df_all = df_all.drop_duplicates(subset='time').sort_values('time').reset_index(drop=True)
+    # 振幅转换: V → dB (20 * log10(V / 1µV))
+    V_ref = 1e-6
+    if 'amplitude' in df_all.columns:
+        df_all['amplitude'] = 20 * np.log10(df_all['amplitude'] / V_ref)
+    if 'threshold' in df_all.columns:
+        df_all['threshold'] = 20 * np.log10(df_all['threshold'] / V_ref)
 
     # 输出: {specimen}声发射.csv (放在试件根目录)
     output_path = os.path.join(folder_path, f'{specimen_name}声发射.csv')
@@ -469,10 +471,19 @@ def print_header(title):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description='Step0: 原始 → CSV')
+    ap.add_argument('--only', default='all',
+                    choices=['all', 'ae', 'luna', 'fbg'],
+                    help='只处理某一类数据（默认全部）。'
+                         '重生成 {gid}声发射.csv 用 --only ae')
+    a = ap.parse_args()
+
     print('=' * 60)
     print('Step 0: 数据预处理 — 原始数据 → CSV')
     print('=' * 60)
     print(f'数据根目录: {os.path.abspath(DATA_ROOT)}')
+    print(f'处理范围: {a.only}')
     print()
 
     # ============================================================
@@ -484,16 +495,19 @@ def main():
         print_header(f'--- 试件: {specimen} ---')
 
         # LUNA DFOS
-        print('[LUNA DFOS]')
-        process_luna_specimen(specimen, specimen)
+        if a.only in ('all', 'luna'):
+            print('[LUNA DFOS]')
+            process_luna_specimen(specimen, specimen)
 
         # FBG
-        print('[FBG]')
-        process_fbg_specimen(specimen, specimen)
+        if a.only in ('all', 'fbg'):
+            print('[FBG]')
+            process_fbg_specimen(specimen, specimen)
 
         # AE
-        print('[AE]')
-        process_ae_specimen(specimen, specimen)
+        if a.only in ('all', 'ae'):
+            print('[AE]')
+            process_ae_specimen(specimen, specimen)
 
     # ============================================================
     # 处理摘要

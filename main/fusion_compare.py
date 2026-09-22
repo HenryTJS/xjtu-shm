@@ -75,7 +75,8 @@ def run_one(gid, name, sources, fusion, force=False):
         pk = None
         if p.get('ae_new') and p.get('ae'):
             pk = p['ae'].get('ae_Peak', 0.0) or 0.0
-        di.update(st, float(pk) if pk is not None else None, p.get('fo'))
+        di.update(st, float(pk) if pk is not None else None, p.get('fo'),
+                  di.shape_value(p.get('ae')))
         rows.append((di.damage, di.risk, di._last_e_ae,
                      di._last_e_strain, di._last_e_fo))
     nfo = len(sim.fo_cols)

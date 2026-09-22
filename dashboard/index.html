@@ -94,7 +94,7 @@
     <!-- 损伤度仪表 -->
     <section class="panel gauge-panel">
       <div class="phead">
-        <div class="ptitle"><i></i>DAMAGE INDEX<b>损伤度 D(t)</b></div>
+        <div class="ptitle"><i></i>DAMAGE INDEX<b id="tDmg">损伤度 D(t)</b></div>
         <div class="ptag" id="gaugeTag">IDLE</div>
       </div>
       <div class="gauge-wrap">
@@ -112,28 +112,29 @@
         </svg>
         <div class="gauge-mid">
           <div class="g-val" id="dVal">0.000</div>
-          <div class="g-unit">损伤度 D</div>
+          <div class="g-unit" id="dUnit">损伤度 D</div>
           <div class="g-badge" id="dBadge">正常</div>
         </div>
       </div>
       <div class="gauge-foot">
         <div class="gf"><label>峰值 D</label><b id="dMax">0.000</b></div>
         <div class="gf"><label>寿命进度</label><b id="dLife">0.0%</b></div>
-        <div class="gf"><label>剩余裕度</label><b id="dMargin">1.000</b></div>
+        <div class="gf"><label id="dMarginLbl">剩余裕度</label><b id="dMargin">1.000</b></div>
       </div>
     </section>
 
     <!-- 主趋势 -->
     <section class="panel trend-panel">
       <div class="phead">
-        <div class="ptitle"><i></i>DAMAGE TREND<b>损伤度 D(t) 趋势 / 分级阈值</b></div>
+        <div class="ptitle"><i></i>DAMAGE TREND<b id="tTrend">损伤度 D(t) 趋势 / 分级阈值</b></div>
         <div class="legend">
-          <span class="lg lg-d"><i></i>D(t)</span>
+          <span class="lg lg-d"><i></i><span id="lgD">D(t)</span></span>
           <span class="lg lg-r"><i></i>证据 risk</span>
           <span class="lg lg-b2" id="lgB2" style="display:none"><i></i>b2 扩展参考</span>
           <span class="lg lg-b3" id="lgB3" style="display:none"><i></i>b3 断裂锚</span>
           <span class="lg lg-c0" id="lgC0" style="display:none"><i></i>c0 基线终点</span>
           <span class="lg lg-rf" id="lgRef" style="display:none"><i></i>论文检测点</span>
+          <span class="lg lg-rf" id="lgHI" style="display:none"><i></i><span id="lgHIt">论文 HI_F 参考（离线）</span></span>
         </div>
       </div>
       <canvas id="cvTrend"></canvas>
@@ -277,6 +278,7 @@
 
 <script src="data/index.js"></script>
 <script src="data/index_l1.js"></script>
+<script src="data/index_l1v2.js"></script>
 <script src="assets/dashboard.js"></script>
 </body>
 </html>

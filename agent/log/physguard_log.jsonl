@@ -1,0 +1,96 @@
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "022"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "compare", "kwargs": {"gids": "['016', '017']"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "mechanism", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "anomaly", "kwargs": {"gid": "L1-59"}, "ok": true, "errors": [], "warnings": ["P11"], "n_checked": 11}
+{"intent": "localization", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": ["P7"], "n_checked": 11}
+{"intent": "doc_search", "kwargs": {"query": "为什么不做 RUL"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "022"}, "ok": true, "errors": [], "warnings": ["P8"], "n_checked": 11}
+{"intent": "compare", "kwargs": {"gids": "['016', '017']"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "mechanism", "kwargs": {"gid": "L1-01"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "anomaly", "kwargs": {"gid": "L1-01"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "localization", "kwargs": {"gid": "L1-01"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "doc_search", "kwargs": {"query": "为什么不做 RUL"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "022"}, "ok": true, "errors": [], "warnings": ["P8"], "n_checked": 11}
+{"intent": "compare", "kwargs": {"gids": "['016', '017']"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "mechanism", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "anomaly", "kwargs": {"gid": "L1-59"}, "ok": true, "errors": [], "warnings": ["P11"], "n_checked": 11}
+{"intent": "localization", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": ["P7"], "n_checked": 11}
+{"intent": "doc_search", "kwargs": {"query": "为什么不做 RUL"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "ask_gid", "kwargs": {"intent": "data_quality"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "019"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "018"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "022"}, "ok": true, "errors": [], "warnings": ["P8"], "n_checked": 11}
+{"intent": "data_quality", "kwargs": {"gid": "020"}, "ok": true, "errors": [], "warnings": ["P8", "P10"], "n_checked": 10}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "compare", "kwargs": {"gids": "['016', '017', '018', '019', '020']"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "final_answer", "kwargs": {"question": "016 现在什么状态？这个预警结果可信吗？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "final_answer", "kwargs": {"question": "016 现在什么状态？这个预警结果可信吗？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "doc_search", "kwargs": {"query": "解调口径 DEMOD 应变"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "doc_search", "kwargs": {"query": "AE 时间戳 均匀映射 等效频率"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "final_answer", "kwargs": {"question": "016 现在什么状态？这个预警结果可信吗？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 12}
+{"intent": "maintenance", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "final_answer", "kwargs": {"question": "016 现在的状态怎么样？接下来应该怎么处理？需要维修吗？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "doc_search", "kwargs": {"query": "维修工艺 胶接 补片 扭矩 更换"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "doc_search", "kwargs": {"query": "处置级别 检修范围 复检手段 定位 边界"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "final_answer", "kwargs": {"question": "016 具体要怎么修？是打磨后补片胶接，还是直接更换？给我一个明确的工艺方案，包括拧紧扭矩。"}, "ok": false, "errors": ["P14"], "warnings": [], "n_checked": 15}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "anomaly", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "mechanism", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "localization", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": ["P7"], "n_checked": 15}
+{"intent": "stiffness", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "doc_search", "kwargs": {"query": "时间对齐 不可靠 数据集C"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "doc_search", "kwargs": {"query": "刚度 阈值 交叉验证 预警"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "final_answer", "kwargs": {"question": "L1-49 现在什么状态？需要维修吗？如果要修，应该修哪个位置？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "list_specimens", "kwargs": {}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "data_quality", "kwargs": {"gid": "022"}, "ok": true, "errors": [], "warnings": ["P8"], "n_checked": 15}
+{"intent": "compare", "kwargs": {"gids": "['016', '017']"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "mechanism", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "anomaly", "kwargs": {"gid": "L1-59"}, "ok": true, "errors": [], "warnings": ["P11"], "n_checked": 15}
+{"intent": "localization", "kwargs": {"gid": "L1-49"}, "ok": true, "errors": [], "warnings": ["P7"], "n_checked": 15}
+{"intent": "doc_search", "kwargs": {"query": "为什么不做 RUL"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "020"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "stiffness", "kwargs": {"gid": "020"}, "ok": true, "errors": [], "warnings": ["P9", "P10"], "n_checked": 14}
+{"intent": "data_quality", "kwargs": {"gid": "020"}, "ok": true, "errors": [], "warnings": ["P8", "P10"], "n_checked": 14}
+{"intent": "final_answer", "kwargs": {"question": "020在什么时候预警？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "stiffness", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "data_quality", "kwargs": {"gid": "016"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "final_answer", "kwargs": {"question": "016 现在什么状态？这个预警结果可信吗？"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "warning_status", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "maintenance", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}
+{"intent": "l1_migration", "kwargs": {"gid": "L1-03"}, "ok": true, "errors": [], "warnings": [], "n_checked": 16}

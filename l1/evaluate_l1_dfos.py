@@ -22,7 +22,11 @@ os.makedirs(FIG, exist_ok=True)
 
 sys.path.insert(0, ROOT)                            # 使 l1_meta 可导入
 from l1_meta import load_meta                       # noqa: E402
-GROUPS = ['L1-03', 'L1-04', 'L1-05', 'L1-09']
+# 第一批（有 FBG）: L1-03/04/05/09；第二批（无 FBG, AE+DFOS）: L1-49..L1-56
+GROUPS_V1 = ['L1-03', 'L1-04', 'L1-05', 'L1-09']
+GROUPS_V2 = ['L1-49', 'L1-50', 'L1-51', 'L1-52', 'L1-54', 'L1-55', 'L1-56',
+             'L1-59', 'L1-60']
+GROUPS = GROUPS_V1 + GROUPS_V2
 META = {g: load_meta(g) for g in GROUPS}
 
 # --- DFOS 空间去尖峰(光纤掉点)标定, 2026-09-12 ---
@@ -31,6 +35,9 @@ META = {g: load_meta(g) for g in GROUPS}
 #   L1-03 0 点 / L1-04 7 点 / L1-05 5 点 / L1-09 263 点(≈ 降采样后 17 个位置)。
 DESPIKE_ABS = 3000.0          # µε — 单点跨越 0.65 mm 的跳变超过此值即非物理
 DESPIKE_K = 8.0               # 相对局部稳健尺度(1.4826×MAD)的倍数; 与 ABS 取大
+
+# FBG 测量块划分阈值(s): 旧组(有 FBG)相邻时间戳间隔 > 该值视为新块(每块 ≈5000 cycles)
+GAP_S = 300.0
 
 
 def load_dfos(gid):
@@ -43,10 +50,26 @@ def load_dfos(gid):
 
 
 def load_fbg_blocks(gid):
+    """测量块时间区间 [[t0,t1],...]（相对秒）。
+
+    旧组（有 FBG）：用 FBG 时间戳 >GAP_S 的间隔划分块（每块 ≈5000 cycles）。
+    第二批（L1-49..L1-56，**无 FBG**）：用 DFOS 自己的测量段
+    （`{gid}dfos_anchor.csv`，由 step0_v2.py 生成），丢弃行数 <30 的碎片段。
+    实测段结构：每段 ≈120 行 @1 Hz（≈119 s），段间 ≈373 s。
+    """
     fp = os.path.join(ROOT, gid, f'{gid}光纤.csv')
+    if not os.path.exists(fp):
+        afp = os.path.join(ROOT, gid, f'{gid}dfos_anchor.csv')
+        if not os.path.exists(afp):
+            print(f'  [{gid}] 无 FBG 也无 dfos_anchor，跳过')
+            return np.zeros((0, 2))
+        a = pd.read_csv(afp, encoding='utf-8-sig')
+        a = a[a['n_rows'] >= 30].reset_index(drop=True)
+        t0 = a['rel_s'].to_numpy(float)
+        return np.column_stack([t0, t0 + a['seg_span_s'].to_numpy(float)])
     fb = pd.read_csv(fp, encoding='utf-8-sig')
     tf = fb['timestamp'].to_numpy(float)
-    gap = np.where(np.diff(tf) > 300.0)[0]
+    gap = np.where(np.diff(tf) > GAP_S)[0]
     bounds = np.concatenate([[0], gap + 1, [len(tf)]])
     blk = []
     for i in range(len(bounds) - 1):
@@ -140,17 +163,48 @@ def despike_profiles(prof, **kw):
     return out, n
 
 
-def analyze(gid):
+def analyze(gid, base_mode='bi'):
     nf = META[gid]['n_f']
     td, pos, M = load_dfos(gid)
     blk = load_fbg_blocks(gid)
     nblk = len(blk)
-    blk_cyc = (np.arange(nblk) + 0.5) / nblk * nf
     row_blk = distribute_rows_to_blocks(td, blk)
-    # 方案A(2026-09-12): 健康基准 = **首个测量块(块0)** 的分布(论文"相对首测"口径)
-    base_rows = row_blk == 0
+
+    # ---- 阶段掩码（第二批有 BI=冲击前 / AI=冲击后；第一批无 phase → 全按 AI）----
+    has_fbg = os.path.exists(os.path.join(ROOT, gid, f'{gid}光纤.csv'))
+    bi_mask = np.zeros(nblk, bool)
+    afp = os.path.join(ROOT, gid, f'{gid}dfos_anchor.csv')
+    if (not has_fbg) and os.path.exists(afp):
+        aa = pd.read_csv(afp, encoding='utf-8-sig')
+        if 'phase' in aa.columns:
+            aa = aa[aa['n_rows'] >= 30].reset_index(drop=True)   # 与 blk 同序
+            if len(aa) == len(blk):
+                bi_mask = aa['phase'].astype(str).str.upper().to_numpy() == 'BI'
+
+    # ---- 寿命锚：只在 **AI（冲击后）** 块上均匀分布；BI 块 cyc = −1 ----
+    n_ai = nblk - int(bi_mask.sum())
+    if bi_mask.any() and n_ai > 0:
+        blk_cyc = np.full(nblk, -1.0)
+        blk_cyc[~bi_mask] = (np.arange(n_ai) + 0.5) / n_ai * nf
+    else:
+        blk_cyc = (np.arange(nblk) + 0.5) / nblk * nf
+
+    # ---- 健康基准 ----
+    # 方案A(2026-09-12，第一批): **首个测量块**（论文"相对首测"口径）
+    # 第二批（2026-09-14）: `--base bi`（默认）= **BI 冲击前段**（物理真健康态，
+    #   适合冲击影响评估/脱粘监测）；`--base post` = 冲击后前 10 段
+    #   （排除冲击本身造成的偏离，适合“疲劳累积”视角）。
+    if has_fbg:
+        base_rows = np.isin(row_blk, [0])
+    elif base_mode == 'bi' and bi_mask.any():
+        base_rows = np.isin(row_blk, np.where(bi_mask)[0])
+        print(f'  [{gid}] 健康基准 = BI(冲击前) {int(bi_mask.sum())} 段')
+    else:
+        cand = np.where(~bi_mask)[0][:10] if bi_mask.any() else np.arange(10)
+        base_rows = np.isin(row_blk, cand)
+        print(f'  [{gid}] 健康基准 = 冲击后前 10 段')
     if base_rows.sum() == 0:
-        base_rows = np.isin(row_blk, [0, 1, 2, 3])     # 退路: 前 4 块
+        base_rows = row_blk >= 0                      # 退路: 全部
     base_prof = np.nanmedian(M[base_rows], axis=0)
     base_nan0 = int(np.isnan(base_prof).sum())          # 清洗前的原始缺失数(数据质量指标)
     # 基准自身也去尖峰(否则基线的掉点会污染全部块的偏离)
@@ -170,14 +224,25 @@ def analyze(gid):
         rmse.append(r); local.append(l)
     rmse = np.array(rmse); local = np.array(local)
     # HI: 用 local(局部峰, 脱粘特征) 归一; 健康期应≈0
-    scale = float(np.nanpercentile(local, 90)) if np.nanpercentile(local, 90) > 0 else 1.0
+    #   2026-09-14: **BI（冲击前）块与"冲击后"基准不同源** → 必须排除出 HI 评估，
+    #   否则 BI 块相对冲击后基准的偏离会让单调包络在 BI 段立即锁定，峰达时刻退化为 cyc=−1。
+    ref = local[~bi_mask] if bi_mask.any() else local
+    p90 = float(np.nanpercentile(ref, 90)) if np.isfinite(ref).any() else 0.0
+    scale = p90 if p90 > 0 else 1.0
     hi = np.clip(local / scale, 0, 1)
-    # 单调累积降噪
-    hi2 = np.zeros(nblk)
+    if bi_mask.any():
+        hi[bi_mask] = np.nan
+    # 单调累积降噪（仅对有效块）
+    hi2 = np.full(nblk, np.nan)
+    last = 0.0
     for k in range(nblk):
-        hi2[k] = max(hi2[k-1], hi[k]) if k > 0 else hi[k]   # 单调包络(保持已达最大)
+        if not np.isfinite(hi[k]):
+            continue
+        last = max(last, hi[k])
+        hi2[k] = last
     hi = hi2
-    tail = hi[int(nblk * 0.6):]
+    valid = np.isfinite(hi)
+    tail = hi[valid][int(valid.sum() * 0.6):] if valid.any() else np.array([])
     mono = float(np.mean(np.diff(tail) >= 0)) * 100 if len(tail) > 2 else np.nan
 
     def first_th(th):
@@ -269,10 +334,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--groups', default=','.join(META))
     ap.add_argument('--mode', default='hi', choices=['hi', 'plot'])
+    ap.add_argument('--base', default='post', choices=['bi', 'post'],
+                    help="健康基准: post=冲击后前10段(默认, 疲劳视角, 与历史口径可比) "
+                         "/ bi=BI冲击前段(冲击影响评估视角)")
     a = ap.parse_args()
     groups = a.groups.split(',')
     if a.mode == 'hi':
-        rows = [analyze(g) for g in groups]
+        rows = [analyze(g, a.base) for g in groups]
         pd.DataFrame(rows).to_csv(os.path.join(RES, 'l1_dfos_metrics.csv'),
                                   index=False, encoding='utf-8-sig')
         for g in groups:

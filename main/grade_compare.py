@@ -57,7 +57,8 @@ def run_one(gid, force=False):
         pk = None
         if q.get('ae_new') and q.get('ae'):
             pk = q['ae'].get('ae_Peak', 0.0) or 0.0
-        di.update(st, float(pk) if pk is not None else None, q.get('fo'))
+        di.update(st, float(pk) if pk is not None else None, q.get('fo'),
+                  di.shape_value(q.get('ae')))
         rows.append((di.damage, di.stiff_loss, di._last_e_ae, di._last_e_strain))
     sim.cleanup()
     arr = np.array(rows, dtype=np.float32)
@@ -103,7 +104,8 @@ def run_gated(gid, force=False):
         pk = None
         if q.get('ae_new') and q.get('ae'):
             pk = q['ae'].get('ae_Peak', 0.0) or 0.0
-        di.update(st, float(pk) if pk is not None else None, q.get('fo'))
+        di.update(st, float(pk) if pk is not None else None, q.get('fo'),
+                  di.shape_value(q.get('ae')))
         rows.append((di.damage, di.level, di.stiff_loss))
     sim.cleanup()
     arr = np.array(rows, dtype=np.float32)
